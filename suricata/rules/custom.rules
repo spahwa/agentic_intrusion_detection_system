@@ -1,0 +1,3 @@
+# Custom Suricata rules for Agentic IDS
+# Uncomment the rule below to test alert generation with ICMP (ping):
+# alert icmp any any -> any any (msg:"TEST - ICMP ping detected"; sid:9000001; rev:1;)

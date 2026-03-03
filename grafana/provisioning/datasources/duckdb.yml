@@ -1,0 +1,10 @@
+apiVersion: 1
+datasources:
+  - name: DuckDB
+    type: motherduck-duckdb-datasource
+    access: proxy
+    uid: duckdb-ids
+    isDefault: true
+    editable: false
+    jsonData:
+      path: /var/log/ids/duckdb/ids_readonly.duckdb

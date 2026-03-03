@@ -1,0 +1,327 @@
+{
+  "uid": "ids-connection-map",
+  "title": "Connection Map",
+  "tags": ["ids"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "show_manufacturer",
+        "type": "custom",
+        "label": "Manufacturer",
+        "query": "Hidden,Visible",
+        "current": { "text": "Hidden", "value": "Hidden" },
+        "options": [
+          { "text": "Hidden", "value": "Hidden", "selected": true },
+          { "text": "Visible", "value": "Visible", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "min_conns",
+        "type": "custom",
+        "label": "Min Connections",
+        "query": "1,5,10,25,50,100",
+        "current": { "text": "5", "value": "5" },
+        "options": [
+          { "text": "1", "value": "1", "selected": false },
+          { "text": "5", "value": "5", "selected": true },
+          { "text": "10", "value": "10", "selected": false },
+          { "text": "25", "value": "25", "selected": false },
+          { "text": "50", "value": "50", "selected": false },
+          { "text": "100", "value": "100", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "view_mode",
+        "type": "custom",
+        "label": "View",
+        "query": "Internal Only,All Traffic",
+        "current": { "text": "All Traffic", "value": "All Traffic" },
+        "options": [
+          { "text": "Internal Only", "value": "Internal Only", "selected": false },
+          { "text": "All Traffic", "value": "All Traffic", "selected": true }
+        ],
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Unique Devices",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "uid": "duckdb-ids", "type": "motherduck-duckdb-datasource" },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "WITH conns AS ( SELECT json_extract_string(raw, '$.\"id.orig_h\"') AS src, json_extract_string(raw, '$.\"id.resp_h\"') AS dst FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) ) SELECT CAST(COUNT(DISTINCT ip) AS BIGINT) AS value FROM ( SELECT src AS ip FROM conns UNION SELECT dst AS ip FROM conns )",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "blue", "value": 10 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Total Connections",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "uid": "duckdb-ids", "type": "motherduck-duckdb-datasource" },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT CAST(COUNT(*) AS BIGINT) AS value FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp)",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "blue", "value": 1000 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total Bytes",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "uid": "duckdb-ids", "type": "motherduck-duckdb-datasource" },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT CAST(SUM(COALESCE(CAST(json_extract(raw, '$.orig_bytes') AS BIGINT), 0) + COALESCE(CAST(json_extract(raw, '$.resp_bytes') AS BIGINT), 0)) AS BIGINT) AS value FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp)",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "blue", "value": 1073741824 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Unique Pairs",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "uid": "duckdb-ids", "type": "motherduck-duckdb-datasource" },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT CAST(COUNT(*) AS BIGINT) AS value FROM ( SELECT DISTINCT json_extract_string(raw, '$.\"id.orig_h\"') AS src, json_extract_string(raw, '$.\"id.resp_h\"') AS dst FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) )",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "blue", "value": 100 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "type": "barchart",
+      "title": "Top Senders (by unique destinations)",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 10 },
+      "datasource": { "uid": "duckdb-ids", "type": "motherduck-duckdb-datasource" },
+      "targets": [
+        {
+          "rawSql": "WITH conns AS ( SELECT json_extract_string(raw, '$.\"id.orig_h\"') AS src, json_extract_string(raw, '$.\"id.resp_h\"') AS dst FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) AND CASE WHEN '${view_mode}' = 'Internal Only' THEN (json_extract_string(raw, '$.\"id.orig_h\"') LIKE '192.168.%' OR json_extract_string(raw, '$.\"id.orig_h\"') LIKE '10.%' OR json_extract_string(raw, '$.\"id.orig_h\"') LIKE '172.16.%') AND (json_extract_string(raw, '$.\"id.resp_h\"') LIKE '192.168.%' OR json_extract_string(raw, '$.\"id.resp_h\"') LIKE '10.%' OR json_extract_string(raw, '$.\"id.resp_h\"') LIKE '172.16.%') ELSE TRUE END ) SELECT src as device, count(DISTINCT dst) as unique_destinations, count(*) as total_connections FROM conns LEFT JOIN devices d ON d.ip = src GROUP BY src HAVING count(*) >= ${min_conns} ORDER BY unique_destinations DESC LIMIT 15",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.97,
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }
+      }
+    },
+    {
+      "id": 7,
+      "type": "barchart",
+      "title": "Top Destinations (by unique sources)",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 10 },
+      "datasource": { "uid": "duckdb-ids", "type": "motherduck-duckdb-datasource" },
+      "targets": [
+        {
+          "rawSql": "WITH conns AS ( SELECT json_extract_string(raw, '$.\"id.orig_h\"') AS src, json_extract_string(raw, '$.\"id.resp_h\"') AS dst FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) AND CASE WHEN '${view_mode}' = 'Internal Only' THEN (json_extract_string(raw, '$.\"id.orig_h\"') LIKE '192.168.%' OR json_extract_string(raw, '$.\"id.orig_h\"') LIKE '10.%' OR json_extract_string(raw, '$.\"id.orig_h\"') LIKE '172.16.%') AND (json_extract_string(raw, '$.\"id.resp_h\"') LIKE '192.168.%' OR json_extract_string(raw, '$.\"id.resp_h\"') LIKE '10.%' OR json_extract_string(raw, '$.\"id.resp_h\"') LIKE '172.16.%') ELSE TRUE END ) SELECT dst as destination, count(DISTINCT src) as unique_sources, count(*) as total_connections FROM conns LEFT JOIN devices d ON d.ip = dst LEFT JOIN external_ips e ON e.ip = dst GROUP BY dst HAVING count(*) >= ${min_conns} ORDER BY unique_sources DESC LIMIT 15",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.97,
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }
+      }
+    },
+    {
+      "id": 8,
+      "type": "barchart",
+      "title": "Top Connection Pairs (by bytes)",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 10 },
+      "datasource": { "uid": "duckdb-ids", "type": "motherduck-duckdb-datasource" },
+      "targets": [
+        {
+          "rawSql": "WITH raw_conns AS ( SELECT json_extract_string(raw, '$.\"id.orig_h\"') AS src, json_extract_string(raw, '$.\"id.resp_h\"') AS dst, COALESCE(CAST(json_extract(raw, '$.orig_bytes') AS BIGINT), 0) + COALESCE(CAST(json_extract(raw, '$.resp_bytes') AS BIGINT), 0) AS total_bytes FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) AND CASE WHEN '${view_mode}' = 'Internal Only' THEN (json_extract_string(raw, '$.\"id.orig_h\"') LIKE '192.168.%' OR json_extract_string(raw, '$.\"id.orig_h\"') LIKE '10.%' OR json_extract_string(raw, '$.\"id.orig_h\"') LIKE '172.16.%') AND (json_extract_string(raw, '$.\"id.resp_h\"') LIKE '192.168.%' OR json_extract_string(raw, '$.\"id.resp_h\"') LIKE '10.%' OR json_extract_string(raw, '$.\"id.resp_h\"') LIKE '172.16.%') ELSE TRUE END ) SELECT src || ' -> ' || dst as pair, count(*) as connections, CAST(sum(total_bytes) AS BIGINT) as bytes FROM raw_conns GROUP BY src, dst HAVING count(*) >= ${min_conns} ORDER BY bytes DESC LIMIT 20",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "bytes" },
+            "properties": [
+              { "id": "unit", "value": "decbytes" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.97,
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Connection Details",
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 10 },
+      "datasource": { "uid": "duckdb-ids", "type": "motherduck-duckdb-datasource" },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "WITH raw_conns AS ( SELECT json_extract_string(raw, '$.\"id.orig_h\"') AS src_ip, json_extract_string(raw, '$.\"id.resp_h\"') AS dst_ip, json_extract_string(raw, '$.\"id.resp_p\"') AS dst_port, json_extract_string(raw, '$.service') AS service, COALESCE(CAST(json_extract(raw, '$.orig_bytes') AS BIGINT), 0) + COALESCE(CAST(json_extract(raw, '$.resp_bytes') AS BIGINT), 0) AS total_bytes FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) ) SELECT rc.src_ip, CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(ds.manufacturer, '') ELSE '***' END AS src_manufacturer, rc.dst_ip, CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(dd.manufacturer, ei.country, '') ELSE COALESCE(ei.country, '***') END AS dst_info, CAST(COUNT(*) AS BIGINT) AS connections, CAST(SUM(rc.total_bytes) AS BIGINT) AS bytes, MODE(COALESCE(rc.service, rc.dst_port)) AS top_service FROM raw_conns rc LEFT JOIN devices ds ON ds.ip = rc.src_ip LEFT JOIN devices dd ON dd.ip = rc.dst_ip LEFT JOIN external_ips ei ON ei.ip = rc.dst_ip GROUP BY rc.src_ip, ds.manufacturer, rc.dst_ip, dd.manufacturer, ei.country ORDER BY connections DESC LIMIT 50",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "bytes" },
+            "properties": [
+              { "id": "unit", "value": "decbytes" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "connections", "desc": true }],
+        "footer": { "show": false }
+      }
+    }
+  ]
+}

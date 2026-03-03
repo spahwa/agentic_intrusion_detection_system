@@ -1,0 +1,1042 @@
+#!/bin/bash
+# Agentic IDS — Full-Stack Sanity Test
+#
+# A single script that validates every layer of the IDS stack end-to-end.
+# Designed to run after `docker compose up -d` as a smoke test.
+#
+# Usage:
+#   bash tests/test_sanity.sh                # Run all tests
+#   bash tests/test_sanity.sh --static-only  # Config tests only (no containers needed)
+#   bash tests/test_sanity.sh --runtime-only # Runtime tests only (containers must be up)
+#
+# Exit code: 0 if all tests pass, 1 if any FAIL
+
+set -euo pipefail
+
+# --- Colors & counters ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+PASS=0
+FAIL=0
+WARN=0
+
+pass() { echo -e "  ${GREEN}[PASS]${NC} $1"; PASS=$((PASS + 1)); }
+fail() { echo -e "  ${RED}[FAIL]${NC} $1"; FAIL=$((FAIL + 1)); }
+warn() { echo -e "  ${YELLOW}[WARN]${NC} $1"; WARN=$((WARN + 1)); }
+section() { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
+
+# --- Parse flags ---
+RUN_STATIC=true
+RUN_RUNTIME=true
+
+case "${1:-}" in
+    --static-only)  RUN_RUNTIME=false ;;
+    --runtime-only) RUN_STATIC=false ;;
+    "") ;; # default: run both
+    *) echo "Usage: $0 [--static-only|--runtime-only]"; exit 2 ;;
+esac
+
+# --- Resolve paths ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Source .env for variable defaults
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$PROJECT_ROOT/.env"
+    set +a
+fi
+
+LOG_DIR="${LOG_DIR:-/var/log/ids}"
+NETWORK_INTERFACE="${NETWORK_INTERFACE:-enp1s0f0}"
+GRAFANA_PORT="${GRAFANA_PORT:-3000}"
+STREAMLIT_PORT="${STREAMLIT_PORT:-8501}"
+DUCKDB_FILE="${LOG_DIR}/duckdb/ids.duckdb"
+DUCKDB_READONLY="${LOG_DIR}/duckdb/ids_readonly.duckdb"
+TTL_HOURS="${DUCKDB_TTL_HOURS:-72}"
+
+echo "============================================================"
+echo " Agentic IDS — Full-Stack Sanity Test"
+echo "============================================================"
+echo " Project: $PROJECT_ROOT"
+echo " Mode:    $(if $RUN_STATIC && $RUN_RUNTIME; then echo "full"; elif $RUN_STATIC; then echo "static-only"; else echo "runtime-only"; fi)"
+echo ""
+
+# All containers in the primary stack (no dual-interface wifi)
+ALL_CONTAINERS="ids-suricata ids-zeek ids-vector ids-duckdb-mgr ids-grafana ids-streamlit ids-alert-agent"
+
+# =============================================================================
+# STATIC TESTS
+# =============================================================================
+
+if $RUN_STATIC; then
+
+    COMPOSE_JSON=$(docker compose -f "$PROJECT_ROOT/docker-compose.yml" config --format json 2>/dev/null) || true
+
+    # ---- S1. Docker Compose Parsing ----
+    section "S1. Docker Compose Config"
+
+    if docker compose -f "$PROJECT_ROOT/docker-compose.yml" config > /dev/null 2>&1; then
+        pass "S01: docker-compose.yml parses without error"
+    else
+        fail "S01: docker-compose.yml fails to parse"
+    fi
+
+    if docker compose -f "$PROJECT_ROOT/docker-compose.yml" --profile dual config > /dev/null 2>&1; then
+        pass "S02: --profile dual config parses without error"
+    else
+        fail "S02: --profile dual config fails to parse"
+    fi
+
+    # ---- S2. Network Modes & Capabilities ----
+    section "S2. Network Modes & Capabilities"
+
+    if [ -n "$COMPOSE_JSON" ]; then
+        # Host-networked services
+        for svc in suricata zeek streamlit alert-agent; do
+            NET_MODE=$(echo "$COMPOSE_JSON" | python3 -c "
+import sys, json; cfg = json.load(sys.stdin)
+print(cfg.get('services',{}).get('${svc}',{}).get('network_mode',''))" 2>/dev/null || echo "")
+            if [ "$NET_MODE" = "host" ]; then
+                pass "S03: $svc uses network_mode: host"
+            else
+                fail "S03: $svc network_mode=$NET_MODE (expected host)"
+            fi
+        done
+
+        # Suricata capabilities
+        SURI_CAPS=$(echo "$COMPOSE_JSON" | python3 -c "
+import sys, json; cfg = json.load(sys.stdin)
+caps = cfg.get('services',{}).get('suricata',{}).get('cap_add',[])
+print(' '.join(sorted(caps)))" 2>/dev/null || echo "")
+        if echo "$SURI_CAPS" | grep -q "NET_ADMIN" && \
+           echo "$SURI_CAPS" | grep -q "NET_RAW" && \
+           echo "$SURI_CAPS" | grep -q "SYS_NICE"; then
+            pass "S04: Suricata has NET_ADMIN, NET_RAW, SYS_NICE"
+        else
+            fail "S04: Suricata capabilities: [$SURI_CAPS]"
+        fi
+
+        # Zeek capabilities
+        ZEEK_CAPS=$(echo "$COMPOSE_JSON" | python3 -c "
+import sys, json; cfg = json.load(sys.stdin)
+caps = cfg.get('services',{}).get('zeek',{}).get('cap_add',[])
+print(' '.join(sorted(caps)))" 2>/dev/null || echo "")
+        if echo "$ZEEK_CAPS" | grep -q "NET_ADMIN" && echo "$ZEEK_CAPS" | grep -q "NET_RAW"; then
+            pass "S05: Zeek has NET_ADMIN, NET_RAW"
+        else
+            fail "S05: Zeek capabilities: [$ZEEK_CAPS]"
+        fi
+    else
+        fail "S03-S05: Could not parse docker compose config as JSON"
+    fi
+
+    # ---- S3. Image Tags ----
+    section "S3. Image Tags & Pinning"
+
+    if grep -qi "latest" "$PROJECT_ROOT/docker-compose.yml" 2>/dev/null; then
+        fail "S06: Found 'latest' tag in docker-compose.yml"
+    else
+        pass "S06: No 'latest' image tags — all pinned"
+    fi
+
+    # ---- S4. Suricata Config ----
+    section "S4. Suricata Configuration"
+
+    SURICATA_YAML="$PROJECT_ROOT/suricata/suricata.yaml"
+    if grep -q 'community-id: true' "$SURICATA_YAML" 2>/dev/null; then
+        pass "S07: community-id enabled in suricata.yaml"
+    else
+        fail "S07: community-id not enabled"
+    fi
+
+    if grep -q 'eve-log:' "$SURICATA_YAML" 2>/dev/null; then
+        pass "S08: EVE JSON output configured"
+    else
+        fail "S08: EVE JSON not configured"
+    fi
+
+    # ---- S5. Zeek Config ----
+    section "S5. Zeek Configuration"
+
+    LOCAL_ZEEK="$PROJECT_ROOT/zeek/local.zeek"
+    if grep -q 'community-id-logging' "$LOCAL_ZEEK" 2>/dev/null; then
+        pass "S09: community-id-logging loaded in local.zeek"
+    else
+        fail "S09: community-id-logging missing"
+    fi
+
+    if grep -q 'LogAscii::use_json = T' "$LOCAL_ZEEK" 2>/dev/null; then
+        pass "S10: JSON output enabled in local.zeek"
+    else
+        fail "S10: JSON output not enabled"
+    fi
+
+    # ---- S6. Healthchecks Defined ----
+    section "S6. Healthcheck Definitions"
+
+    if [ -n "$COMPOSE_JSON" ]; then
+        for svc in suricata zeek vector duckdb-mgr grafana streamlit alert-agent; do
+            HC=$(echo "$COMPOSE_JSON" | python3 -c "
+import sys, json; cfg = json.load(sys.stdin)
+hc = cfg.get('services',{}).get('${svc}',{}).get('healthcheck',{})
+print('yes' if hc.get('test') else 'no')" 2>/dev/null || echo "no")
+            if [ "$HC" = "yes" ]; then
+                pass "S11: $svc has healthcheck defined"
+            else
+                fail "S11: $svc missing healthcheck"
+            fi
+        done
+    fi
+
+    # ---- S7. DuckDB Schema ----
+    section "S7. DuckDB Schema File"
+
+    SCHEMA_FILE="$PROJECT_ROOT/duckdb-mgr/schema.sql"
+    for table in events _ingested_files oui_lookup geoip_lookup devices external_ips anomaly_events _known_devices device_baselines nmap_scans; do
+        if grep -q "$table" "$SCHEMA_FILE" 2>/dev/null; then
+            pass "S12: Table '$table' defined in schema.sql"
+        else
+            fail "S12: Table '$table' missing from schema.sql"
+        fi
+    done
+
+    # ---- S8. Suricata Rule Update Config ----
+    section "S8. Suricata Rule Update Watchdog"
+
+    if grep -q 'rule_update_watchdog' "$PROJECT_ROOT/suricata/entrypoint.sh" 2>/dev/null; then
+        pass "S13: rule_update_watchdog defined in entrypoint.sh"
+    else
+        fail "S13: rule_update_watchdog missing from entrypoint.sh"
+    fi
+
+    if grep -q 'RULE_UPDATE_INTERVAL_HOURS' "$PROJECT_ROOT/suricata/entrypoint.sh" 2>/dev/null; then
+        pass "S14: RULE_UPDATE_INTERVAL_HOURS used in entrypoint.sh"
+    else
+        fail "S14: RULE_UPDATE_INTERVAL_HOURS missing from entrypoint.sh"
+    fi
+
+    # ---- S9. Nmap Tool Definitions ----
+    section "S9. Nmap Tool Definitions"
+
+    TOOLS_PY="$PROJECT_ROOT/streamlit/tools.py"
+    if grep -q 'def nmap_scan' "$TOOLS_PY" 2>/dev/null; then
+        pass "S15: nmap_scan function defined in tools.py"
+    else
+        fail "S15: nmap_scan missing from tools.py"
+    fi
+
+    if grep -q 'def get_scan_history' "$TOOLS_PY" 2>/dev/null; then
+        pass "S16: get_scan_history function defined in tools.py"
+    else
+        fail "S16: get_scan_history missing from tools.py"
+    fi
+
+    if grep -q '_is_rfc1918' "$TOOLS_PY" 2>/dev/null; then
+        pass "S17: RFC1918 validation present in tools.py"
+    else
+        fail "S17: RFC1918 validation missing from tools.py"
+    fi
+
+    # Python syntax check on key files
+    section "S10. Python Syntax Validation"
+
+    for pyfile in streamlit/tools.py streamlit/app.py streamlit/system_prompt.py \
+                  duckdb-mgr/main.py alert-agent/main.py alert-agent/tools.py; do
+        FULL_PATH="$PROJECT_ROOT/$pyfile"
+        if [ -f "$FULL_PATH" ]; then
+            if python3 -c "import ast; ast.parse(open('$FULL_PATH').read())" 2>/dev/null; then
+                pass "S18: $pyfile syntax OK"
+            else
+                fail "S18: $pyfile has syntax errors"
+            fi
+        fi
+    done
+
+    # ---- S11. Threat Intel RAG ----
+    section "S11. Threat Intel RAG"
+
+    # duckdb-mgr uses network_mode: host (required for Ollama access)
+    if [ -n "$COMPOSE_JSON" ]; then
+        DUCKDB_NET=$(echo "$COMPOSE_JSON" | python3 -c "
+import sys, json; cfg = json.load(sys.stdin)
+print(cfg.get('services',{}).get('duckdb-mgr',{}).get('network_mode',''))" 2>/dev/null || echo "")
+        if [ "$DUCKDB_NET" = "host" ]; then
+            pass "S19: duckdb-mgr uses network_mode: host (for Ollama RAG access)"
+        else
+            fail "S19: duckdb-mgr network_mode=$DUCKDB_NET (expected host for RAG)"
+        fi
+
+        # OLLAMA_HOST env in duckdb-mgr
+        DUCKDB_ENV=$(echo "$COMPOSE_JSON" | python3 -c "
+import sys, json; cfg = json.load(sys.stdin)
+env = cfg.get('services',{}).get('duckdb-mgr',{}).get('environment',[])
+if isinstance(env, dict):
+    keys = list(env.keys())
+else:
+    keys = [e.split('=')[0] for e in env if '=' in e]
+print(' '.join(keys))" 2>/dev/null || echo "")
+        if echo "$DUCKDB_ENV" | grep -q "OLLAMA_HOST" && \
+           echo "$DUCKDB_ENV" | grep -q "EMBED_MODEL" && \
+           echo "$DUCKDB_ENV" | grep -q "RAG_DUCKDB_PATH"; then
+            pass "S20: duckdb-mgr has OLLAMA_HOST, EMBED_MODEL, RAG_DUCKDB_PATH env vars"
+        else
+            fail "S20: duckdb-mgr missing RAG env vars (got: $DUCKDB_ENV)"
+        fi
+
+        # RAG env in streamlit
+        ST_ENV=$(echo "$COMPOSE_JSON" | python3 -c "
+import sys, json; cfg = json.load(sys.stdin)
+env = cfg.get('services',{}).get('streamlit',{}).get('environment',[])
+if isinstance(env, dict):
+    keys = list(env.keys())
+else:
+    keys = [e.split('=')[0] for e in env if '=' in e]
+print(' '.join(keys))" 2>/dev/null || echo "")
+        if echo "$ST_ENV" | grep -q "EMBED_MODEL" && echo "$ST_ENV" | grep -q "RAG_DUCKDB_PATH"; then
+            pass "S21: streamlit has EMBED_MODEL, RAG_DUCKDB_PATH env vars"
+        else
+            fail "S21: streamlit missing RAG env vars"
+        fi
+
+        # RAG env in alert-agent
+        AA_ENV=$(echo "$COMPOSE_JSON" | python3 -c "
+import sys, json; cfg = json.load(sys.stdin)
+env = cfg.get('services',{}).get('alert-agent',{}).get('environment',[])
+if isinstance(env, dict):
+    keys = list(env.keys())
+else:
+    keys = [e.split('=')[0] for e in env if '=' in e]
+print(' '.join(keys))" 2>/dev/null || echo "")
+        if echo "$AA_ENV" | grep -q "EMBED_MODEL" && echo "$AA_ENV" | grep -q "RAG_DUCKDB_PATH"; then
+            pass "S22: alert-agent has EMBED_MODEL, RAG_DUCKDB_PATH env vars"
+        else
+            fail "S22: alert-agent missing RAG env vars"
+        fi
+    fi
+
+    # RAG functions defined in Python source
+    if grep -q 'def rag_search_threat_intel' "$PROJECT_ROOT/streamlit/tools.py" 2>/dev/null; then
+        pass "S23: rag_search_threat_intel defined in streamlit/tools.py"
+    else
+        fail "S23: rag_search_threat_intel missing from streamlit/tools.py"
+    fi
+
+    if grep -q 'def rag_search_threat_intel' "$PROJECT_ROOT/alert-agent/tools.py" 2>/dev/null; then
+        pass "S24: rag_search_threat_intel defined in alert-agent/tools.py"
+    else
+        fail "S24: rag_search_threat_intel missing from alert-agent/tools.py"
+    fi
+
+    if grep -q 'def index_threat_intel' "$PROJECT_ROOT/duckdb-mgr/main.py" 2>/dev/null; then
+        pass "S25: index_threat_intel defined in duckdb-mgr/main.py"
+    else
+        fail "S25: index_threat_intel missing from duckdb-mgr/main.py"
+    fi
+
+    # Suricata entrypoint copies rules to shared volume
+    if grep -q 'suricata/rules' "$PROJECT_ROOT/suricata/entrypoint.sh" 2>/dev/null && \
+       grep -q 'suricata.rules' "$PROJECT_ROOT/suricata/entrypoint.sh" 2>/dev/null; then
+        pass "S26: suricata/entrypoint.sh copies rules to shared volume"
+    else
+        fail "S26: suricata/entrypoint.sh missing rule copy for RAG"
+    fi
+
+    # rag_search_threat_intel in tool definitions and map
+    if grep -q '"rag_search_threat_intel"' "$PROJECT_ROOT/streamlit/tools.py" 2>/dev/null; then
+        pass "S27: rag_search_threat_intel in streamlit TOOL_DEFINITIONS"
+    else
+        fail "S27: rag_search_threat_intel not in streamlit TOOL_DEFINITIONS"
+    fi
+
+    if grep -q '"rag_search_threat_intel"' "$PROJECT_ROOT/alert-agent/tools.py" 2>/dev/null; then
+        pass "S28: rag_search_threat_intel in alert-agent TOOL_DEFINITIONS"
+    else
+        fail "S28: rag_search_threat_intel not in alert-agent TOOL_DEFINITIONS"
+    fi
+
+    # System prompt mentions RAG tool
+    if grep -q 'rag_search_threat_intel' "$PROJECT_ROOT/streamlit/system_prompt.py" 2>/dev/null; then
+        pass "S29: rag_search_threat_intel referenced in streamlit system_prompt.py"
+    else
+        fail "S29: rag_search_threat_intel missing from streamlit system_prompt.py"
+    fi
+
+    # Alert-agent main pre-enrichment
+    if grep -q 'rag_search_threat_intel' "$PROJECT_ROOT/alert-agent/main.py" 2>/dev/null; then
+        pass "S30: alert-agent/main.py uses rag_search_threat_intel for pre-enrichment"
+    else
+        fail "S30: alert-agent/main.py missing rag_search_threat_intel pre-enrichment"
+    fi
+
+fi # end static tests
+
+# =============================================================================
+# RUNTIME TESTS
+# =============================================================================
+
+if $RUN_RUNTIME; then
+
+    # ---- R1. All Containers Running ----
+    section "R1. Container Status"
+
+    for ctr in $ALL_CONTAINERS; do
+        STATE=$(docker inspect --format='{{.State.Status}}' "$ctr" 2>/dev/null || echo "not_found")
+        RESTARTING=$(docker inspect --format='{{.State.Restarting}}' "$ctr" 2>/dev/null || echo "true")
+        if [ "$STATE" = "running" ] && [ "$RESTARTING" = "false" ]; then
+            pass "R01: $ctr is running"
+        else
+            fail "R01: $ctr state=$STATE restarting=$RESTARTING"
+        fi
+    done
+
+    # ---- R2. Docker Health Status ----
+    section "R2. Docker Health Status"
+
+    for ctr in $ALL_CONTAINERS; do
+        HEALTH=$(docker inspect --format='{{.State.Health.Status}}' "$ctr" 2>/dev/null || echo "none")
+        case "$HEALTH" in
+            healthy)
+                pass "R02: $ctr is healthy"
+                ;;
+            starting)
+                warn "R02: $ctr health is still 'starting' (may need more time)"
+                ;;
+            unhealthy)
+                fail "R02: $ctr is unhealthy"
+                # Show last health check log
+                docker inspect --format='{{range .State.Health.Log}}{{.Output}}{{end}}' "$ctr" 2>/dev/null | tail -3
+                ;;
+            none|"")
+                warn "R02: $ctr has no healthcheck status"
+                ;;
+            *)
+                warn "R02: $ctr health=$HEALTH"
+                ;;
+        esac
+    done
+
+    # ---- R3. Suricata ----
+    section "R3. Suricata Logs & Output"
+
+    EVE_FILE="$LOG_DIR/suricata/eve.json"
+    elapsed=0
+    while [ ! -s "$EVE_FILE" ] && [ $elapsed -lt 45 ]; do
+        sleep 3
+        elapsed=$((elapsed + 3))
+    done
+
+    if [ -s "$EVE_FILE" ]; then
+        pass "R03: eve.json exists and non-empty (${elapsed}s)"
+
+        if head -1 "$EVE_FILE" | python3 -m json.tool > /dev/null 2>&1; then
+            pass "R04: eve.json contains valid JSON"
+        else
+            fail "R04: eve.json first line is not valid JSON"
+        fi
+    else
+        fail "R03: eve.json missing or empty after 45s"
+        fail "R04: Cannot test — eve.json missing"
+    fi
+
+    SURI_LOGS=$(docker logs ids-suricata 2>&1 | tail -200)
+    if echo "$SURI_LOGS" | grep -qi "engine started"; then
+        pass "R05: Suricata 'Engine started' in logs"
+    else
+        fail "R05: Suricata 'Engine started' not found in logs"
+    fi
+
+    if echo "$SURI_LOGS" | grep -q "$NETWORK_INTERFACE"; then
+        pass "R06: Suricata listening on $NETWORK_INTERFACE"
+    else
+        fail "R06: Suricata not listening on $NETWORK_INTERFACE"
+    fi
+
+    # Rule update watchdog
+    if echo "$SURI_LOGS" | grep -q "rule-update"; then
+        pass "R07: Rule update watchdog started"
+    else
+        warn "R07: Rule update watchdog not yet visible in logs (120s startup delay)"
+    fi
+
+    # ---- R4. Zeek ----
+    section "R4. Zeek Logs & Output"
+
+    elapsed=0
+    while [ -z "$(find "${LOG_DIR}/zeek" -name '*.log' 2>/dev/null)" ] && [ $elapsed -lt 45 ]; do
+        sleep 3
+        elapsed=$((elapsed + 3))
+    done
+
+    ZEEK_LOGS_FILES=$(find "${LOG_DIR}/zeek" -name '*.log' 2>/dev/null || true)
+    if [ -n "$ZEEK_LOGS_FILES" ]; then
+        LOG_COUNT=$(echo "$ZEEK_LOGS_FILES" | wc -l)
+        pass "R08: Found $LOG_COUNT Zeek log file(s) (${elapsed}s)"
+
+        # Validate JSON on first non-empty log
+        for logfile in $ZEEK_LOGS_FILES; do
+            if [ -s "$logfile" ]; then
+                if head -1 "$logfile" | python3 -m json.tool > /dev/null 2>&1; then
+                    pass "R09: Zeek JSON output valid ($(basename "$logfile"))"
+                else
+                    fail "R09: Zeek $(basename "$logfile") first line not valid JSON"
+                fi
+                break
+            fi
+        done
+    else
+        fail "R08: No Zeek .log files after 45s"
+        fail "R09: Cannot test — no Zeek logs"
+    fi
+
+    ZEEK_DOCKER_LOGS=$(docker logs ids-zeek 2>&1 | tail -50)
+    if echo "$ZEEK_DOCKER_LOGS" | grep -qi "listening on"; then
+        pass "R10: Zeek 'listening on' in docker logs"
+    else
+        fail "R10: Zeek 'listening on' not found"
+    fi
+
+    # ---- R5. Vector ----
+    section "R5. Vector Data Pipeline"
+
+    VECTOR_DIR="${LOG_DIR}/vector"
+    if [ -d "$VECTOR_DIR" ]; then
+        NDJSON_COUNT=$(find "$VECTOR_DIR" -name '*.ndjson' 2>/dev/null | wc -l)
+        if [ "$NDJSON_COUNT" -gt 0 ]; then
+            pass "R11: $NDJSON_COUNT NDJSON staging file(s) in Vector dir"
+
+            FIRST_NDJSON=$(find "$VECTOR_DIR" -name '*.ndjson' -size +0c 2>/dev/null | head -1)
+            if [ -n "$FIRST_NDJSON" ]; then
+                if head -1 "$FIRST_NDJSON" | python3 -m json.tool > /dev/null 2>&1; then
+                    pass "R12: NDJSON content is valid JSON"
+                else
+                    fail "R12: NDJSON first line is not valid JSON"
+                fi
+            else
+                warn "R12: All NDJSON files empty"
+            fi
+        else
+            warn "R11: No NDJSON files yet (need more time/traffic)"
+            warn "R12: Cannot test — no NDJSON files"
+        fi
+    else
+        fail "R11: Vector staging dir $VECTOR_DIR does not exist"
+        fail "R12: Cannot test — no Vector dir"
+    fi
+
+    # ---- R6. DuckDB ----
+    section "R6. DuckDB Database & Tables"
+
+    if [ -f "$DUCKDB_FILE" ]; then
+        pass "R13: DuckDB file exists"
+
+        ROW_COUNT=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+print(db.execute('SELECT count(*) FROM events').fetchone()[0])
+db.close()
+" 2>/dev/null || echo "ERROR")
+
+        if [ "$ROW_COUNT" != "ERROR" ] && [ "$ROW_COUNT" -gt 0 ] 2>/dev/null; then
+            pass "R14: events table has $ROW_COUNT row(s)"
+        elif [ "$ROW_COUNT" = "0" ]; then
+            warn "R14: events table has 0 rows (need more time/traffic)"
+        else
+            fail "R14: Could not query events table"
+        fi
+
+        # TTL compliance
+        EXPIRED=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+print(db.execute(\"SELECT count(*) FROM events WHERE timestamp < now() - INTERVAL '$TTL_HOURS hours'\").fetchone()[0])
+db.close()
+" 2>/dev/null || echo "ERROR")
+        if [ "$EXPIRED" = "0" ]; then
+            pass "R15: TTL compliant — 0 events older than ${TTL_HOURS}h"
+        elif [ "$EXPIRED" = "ERROR" ]; then
+            warn "R15: Could not check TTL compliance"
+        else
+            fail "R15: $EXPIRED event(s) older than ${TTL_HOURS}h"
+        fi
+
+        # Source tools present
+        SOURCES=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+rows = db.execute('SELECT DISTINCT source_tool FROM events').fetchall()
+for r in rows: print(r[0])
+db.close()
+" 2>/dev/null || echo "ERROR")
+        if [ "$SOURCES" != "ERROR" ]; then
+            for tool in suricata zeek; do
+                if echo "$SOURCES" | grep -q "$tool"; then
+                    pass "R16: Events from $tool present in DuckDB"
+                else
+                    warn "R16: No events from $tool yet"
+                fi
+            done
+        else
+            warn "R16: Could not query source tools"
+        fi
+
+        # All expected tables exist
+        TABLES=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+rows = db.execute(\"SELECT table_name FROM information_schema.tables WHERE table_schema='main'\").fetchall()
+for r in rows: print(r[0])
+db.close()
+" 2>/dev/null || echo "ERROR")
+        if [ "$TABLES" != "ERROR" ]; then
+            for tbl in events devices external_ips oui_lookup geoip_lookup anomaly_events _known_devices device_baselines nmap_scans; do
+                if echo "$TABLES" | grep -q "$tbl"; then
+                    pass "R17: Table '$tbl' exists in DuckDB"
+                else
+                    fail "R17: Table '$tbl' missing from DuckDB"
+                fi
+            done
+        else
+            fail "R17: Could not list DuckDB tables"
+        fi
+
+        # Readonly snapshots exist
+        for snap in ids_readonly.duckdb ids_streamlit.duckdb ids_alert.duckdb; do
+            if [ -f "${LOG_DIR}/duckdb/$snap" ]; then
+                pass "R18: Snapshot $snap exists"
+            else
+                warn "R18: Snapshot $snap not yet created (first cycle may not have run)"
+            fi
+        done
+
+        # community_id presence
+        CID_COUNT=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+print(db.execute(\"SELECT count(*) FROM events WHERE raw::VARCHAR LIKE '%community_id%'\").fetchone()[0])
+db.close()
+" 2>/dev/null || echo "ERROR")
+        if [ "$CID_COUNT" != "ERROR" ] && [ "$CID_COUNT" -gt 0 ] 2>/dev/null; then
+            pass "R19: $CID_COUNT event(s) with community_id"
+        else
+            warn "R19: No community_id events yet (need flow traffic)"
+        fi
+    else
+        fail "R13: DuckDB file not found"
+        fail "R14-R19: Skipped — no DuckDB file"
+    fi
+
+    # ---- R7. Enrichment Data ----
+    section "R7. OUI & GeoIP Enrichment"
+
+    OUI_COUNT=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+print(db.execute('SELECT count(*) FROM oui_lookup').fetchone()[0])
+db.close()
+" 2>/dev/null || echo "ERROR")
+    if [ "$OUI_COUNT" != "ERROR" ] && [ "$OUI_COUNT" -gt 1000 ] 2>/dev/null; then
+        pass "R20: OUI lookup has $OUI_COUNT entries"
+    elif [ "$OUI_COUNT" = "0" ] || [ "$OUI_COUNT" = "ERROR" ]; then
+        warn "R20: OUI lookup empty or not loaded"
+    else
+        warn "R20: OUI lookup has only $OUI_COUNT entries (expected 30K+)"
+    fi
+
+    GEOIP_COUNT=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+print(db.execute('SELECT count(*) FROM geoip_lookup').fetchone()[0])
+db.close()
+" 2>/dev/null || echo "ERROR")
+    if [ "$GEOIP_COUNT" != "ERROR" ] && [ "$GEOIP_COUNT" -gt 10000 ] 2>/dev/null; then
+        pass "R21: GeoIP lookup has $GEOIP_COUNT entries"
+    elif [ "$GEOIP_COUNT" = "0" ] || [ "$GEOIP_COUNT" = "ERROR" ]; then
+        warn "R21: GeoIP lookup empty or not loaded"
+    else
+        warn "R21: GeoIP lookup has only $GEOIP_COUNT entries (expected 200K+)"
+    fi
+
+    DEVICE_COUNT=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+print(db.execute('SELECT count(*) FROM devices').fetchone()[0])
+db.close()
+" 2>/dev/null || echo "ERROR")
+    if [ "$DEVICE_COUNT" != "ERROR" ] && [ "$DEVICE_COUNT" -gt 0 ] 2>/dev/null; then
+        pass "R22: Device summaries populated ($DEVICE_COUNT devices)"
+    else
+        warn "R22: No devices in summary table yet"
+    fi
+
+    # ---- R8. Grafana ----
+    section "R8. Grafana Dashboards"
+
+    HEALTH=$(curl -sf "http://localhost:${GRAFANA_PORT}/api/health" 2>/dev/null || echo "")
+    if echo "$HEALTH" | grep -q '"database"'; then
+        pass "R23: Grafana health endpoint OK"
+    else
+        fail "R23: Grafana health endpoint not responding"
+    fi
+
+    DS=$(curl -sf -u admin:admin "http://localhost:${GRAFANA_PORT}/api/datasources" 2>/dev/null || echo "")
+    if echo "$DS" | grep -q 'motherduck-duckdb-datasource'; then
+        pass "R24: DuckDB datasource provisioned"
+    else
+        fail "R24: DuckDB datasource not found"
+    fi
+
+    DASHBOARDS=$(curl -sf -u admin:admin "http://localhost:${GRAFANA_PORT}/api/search?tag=ids" 2>/dev/null || echo "")
+    DASH_COUNT=$(echo "$DASHBOARDS" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+    if [ "$DASH_COUNT" -ge 6 ]; then
+        pass "R25: $DASH_COUNT dashboards loaded"
+    elif [ "$DASH_COUNT" -ge 1 ]; then
+        warn "R25: Only $DASH_COUNT dashboards loaded (expected 6+)"
+    else
+        fail "R25: No dashboards found"
+    fi
+
+    # ---- R9. Ollama ----
+    section "R9. Ollama LLM"
+
+    OLLAMA_TAGS=$(curl -sf "http://localhost:11434/api/tags" 2>/dev/null || echo "")
+    if [ -n "$OLLAMA_TAGS" ]; then
+        pass "R26: Ollama API reachable on localhost:11434"
+    else
+        fail "R26: Ollama API not reachable"
+    fi
+
+    if echo "$OLLAMA_TAGS" | grep -q "qwen2.5"; then
+        pass "R27: qwen2.5 model available"
+    else
+        fail "R27: qwen2.5 model not found (run: ollama pull qwen2.5:3b)"
+    fi
+
+    # ---- R10. Streamlit Chat UI ----
+    section "R10. Streamlit Chat UI"
+
+    ST_HEALTH=$(curl -sf "http://localhost:${STREAMLIT_PORT}/_stcore/health" 2>/dev/null || echo "")
+    if echo "$ST_HEALTH" | grep -qi "ok"; then
+        pass "R28: Streamlit health endpoint OK"
+    else
+        fail "R28: Streamlit health endpoint not responding"
+    fi
+
+    # DuckDB queryable from streamlit
+    DB_CHECK=$(docker exec ids-streamlit python3 -c "
+import duckdb, os
+db = duckdb.connect(os.environ.get('DUCKDB_PATH', '/var/log/ids/duckdb/ids_streamlit.duckdb'), read_only=True)
+count = db.execute('SELECT count(*) FROM events').fetchone()[0]
+print(f'OK:{count}')
+db.close()
+" 2>/dev/null || echo "FAIL")
+    if echo "$DB_CHECK" | grep -q "^OK:"; then
+        EVENT_COUNT=$(echo "$DB_CHECK" | sed 's/OK://')
+        pass "R29: DuckDB queryable from Streamlit ($EVENT_COUNT events)"
+    else
+        fail "R29: DuckDB not queryable from Streamlit"
+    fi
+
+    # Ollama reachable from streamlit
+    OLLAMA_CHECK=$(docker exec ids-streamlit python3 -c "
+import ollama, os
+client = ollama.Client(host=os.environ.get('OLLAMA_HOST', 'http://localhost:11434'))
+models = client.list()
+names = [m.model for m in models.models]
+print(f'OK:{len(names)}')
+" 2>/dev/null || echo "FAIL")
+    if echo "$OLLAMA_CHECK" | grep -q "^OK:"; then
+        pass "R30: Ollama reachable from Streamlit container"
+    else
+        fail "R30: Ollama not reachable from Streamlit"
+    fi
+
+    # ---- R11. Nmap ----
+    section "R11. Nmap Integration"
+
+    # Nmap binary in streamlit
+    NMAP_VER_ST=$(docker exec ids-streamlit nmap --version 2>/dev/null | head -1 || echo "")
+    if echo "$NMAP_VER_ST" | grep -qi "nmap"; then
+        pass "R31: nmap installed in Streamlit container ($NMAP_VER_ST)"
+    else
+        fail "R31: nmap not found in Streamlit container"
+    fi
+
+    # Nmap binary in duckdb-mgr
+    NMAP_VER_DB=$(docker exec ids-duckdb-mgr nmap --version 2>/dev/null | head -1 || echo "")
+    if echo "$NMAP_VER_DB" | grep -qi "nmap"; then
+        pass "R32: nmap installed in duckdb-mgr container ($NMAP_VER_DB)"
+    else
+        fail "R32: nmap not found in duckdb-mgr container"
+    fi
+
+    # RFC1918 validation works
+    RFC_CHECK=$(docker exec ids-streamlit python3 -c "
+import sys
+sys.path.insert(0, '/app')
+from tools import _is_rfc1918
+assert _is_rfc1918('192.168.1.0/24') == True
+assert _is_rfc1918('10.0.0.1') == True
+assert _is_rfc1918('172.16.0.0/12') == True
+assert _is_rfc1918('8.8.8.8') == False
+assert _is_rfc1918('1.1.1.1') == False
+print('OK')
+" 2>/dev/null || echo "FAIL")
+    if [ "$RFC_CHECK" = "OK" ]; then
+        pass "R33: RFC1918 validation logic correct"
+    else
+        fail "R33: RFC1918 validation logic failed"
+    fi
+
+    # Nmap scan on a private address (quick, validates RFC1918 + nmap execution)
+    # Use the gateway (first IP in configured subnet) — always reachable on local LAN
+    NMAP_TARGET=$(echo "${NMAP_SUBNET:-192.168.2.0/24}" | sed 's|\.[0-9]*/.*|.1|')
+    SCAN_CHECK=$(docker exec ids-streamlit python3 -c "
+import sys, json
+sys.path.insert(0, '/app')
+from tools import nmap_scan
+result = json.loads(nmap_scan('$NMAP_TARGET', 'quick'))
+if 'error' in result:
+    print(f'ERROR:{result[\"error\"]}')
+else:
+    print(f'OK:{result.get(\"host_count\", 0)}')
+" 2>/dev/null || echo "FAIL")
+    if echo "$SCAN_CHECK" | grep -q "^OK:"; then
+        HOST_CT=$(echo "$SCAN_CHECK" | sed 's/OK://')
+        pass "R34: nmap_scan on $NMAP_TARGET worked ($HOST_CT host(s))"
+    else
+        fail "R34: nmap_scan on $NMAP_TARGET failed: $SCAN_CHECK"
+    fi
+
+    # Scan saved to SQLite
+    SQLITE_CHECK=$(docker exec ids-streamlit python3 -c "
+import sqlite3
+conn = sqlite3.connect('/var/log/ids/duckdb/nmap_results.db')
+count = conn.execute('SELECT count(*) FROM nmap_results').fetchone()[0]
+print(f'OK:{count}')
+conn.close()
+" 2>/dev/null || echo "FAIL")
+    if echo "$SQLITE_CHECK" | grep -q "^OK:"; then
+        SCAN_CT=$(echo "$SQLITE_CHECK" | sed 's/OK://')
+        if [ "$SCAN_CT" -gt 0 ] 2>/dev/null; then
+            pass "R35: nmap results saved to SQLite ($SCAN_CT scan(s))"
+        else
+            warn "R35: nmap_results.db exists but 0 scans (previous test may have failed)"
+        fi
+    else
+        fail "R35: Could not query nmap_results.db"
+    fi
+
+    # get_scan_history works
+    HIST_CHECK=$(docker exec ids-streamlit python3 -c "
+import sys, json
+sys.path.insert(0, '/app')
+from tools import get_scan_history
+result = json.loads(get_scan_history())
+print(f'OK:{result.get(\"count\", 0)}')
+" 2>/dev/null || echo "FAIL")
+    if echo "$HIST_CHECK" | grep -q "^OK:"; then
+        pass "R36: get_scan_history returns results"
+    else
+        fail "R36: get_scan_history failed: $HIST_CHECK"
+    fi
+
+    # Reject non-RFC1918 targets
+    REJECT_CHECK=$(docker exec ids-streamlit python3 -c "
+import sys, json
+sys.path.insert(0, '/app')
+from tools import nmap_scan
+result = json.loads(nmap_scan('8.8.8.8', 'quick'))
+if 'error' in result and 'RFC1918' in result['error']:
+    print('OK')
+else:
+    print('FAIL')
+" 2>/dev/null || echo "FAIL")
+    if [ "$REJECT_CHECK" = "OK" ]; then
+        pass "R37: nmap_scan rejects non-RFC1918 targets"
+    else
+        fail "R37: nmap_scan did NOT reject external target 8.8.8.8"
+    fi
+
+    # nmap_scans table in DuckDB
+    NMAP_TBL=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+print(db.execute('SELECT count(*) FROM nmap_scans').fetchone()[0])
+db.close()
+" 2>/dev/null || echo "ERROR")
+    if [ "$NMAP_TBL" != "ERROR" ]; then
+        pass "R38: nmap_scans table queryable in DuckDB ($NMAP_TBL rows)"
+    else
+        fail "R38: nmap_scans table not queryable"
+    fi
+
+    # ---- R12. Alert Agent ----
+    section "R12. Alert Agent"
+
+    ANOM_CHECK=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+print(db.execute('SELECT count(*) FROM anomaly_events').fetchone()[0])
+db.close()
+" 2>/dev/null || echo "ERROR")
+    if [ "$ANOM_CHECK" != "ERROR" ]; then
+        pass "R39: anomaly_events table queryable ($ANOM_CHECK rows)"
+    else
+        fail "R39: anomaly_events table not queryable"
+    fi
+
+    KD_CHECK=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+print(db.execute('SELECT count(*) FROM _known_devices').fetchone()[0])
+db.close()
+" 2>/dev/null || echo "ERROR")
+    if [ "$KD_CHECK" != "ERROR" ]; then
+        pass "R40: _known_devices table queryable ($KD_CHECK devices)"
+    else
+        fail "R40: _known_devices table not queryable"
+    fi
+
+    if [ -f "/var/log/ids/duckdb/alert_state.db" ]; then
+        pass "R41: alert_state.db exists"
+    else
+        warn "R41: alert_state.db not yet created (created on first anomaly poll)"
+    fi
+
+    ALERT_LOGS=$(docker logs ids-alert-agent 2>&1 | tail -50)
+    if echo "$ALERT_LOGS" | grep -q "Ollama ready"; then
+        pass "R42: alert-agent connected to Ollama"
+    elif echo "$ALERT_LOGS" | grep -q "Waiting for Ollama"; then
+        warn "R42: alert-agent is waiting for Ollama"
+    else
+        warn "R42: alert-agent Ollama status unclear from logs"
+    fi
+
+    # ---- R13. Curl in Streamlit (for healthcheck) ----
+    section "R13. Healthcheck Dependencies"
+
+    CURL_CHECK=$(docker exec ids-streamlit curl --version 2>/dev/null | head -1 || echo "")
+    if echo "$CURL_CHECK" | grep -qi "curl"; then
+        pass "R43: curl installed in Streamlit container"
+    else
+        fail "R43: curl not found in Streamlit container (needed for healthcheck)"
+    fi
+
+    # ---- R14. Threat Intel RAG ----
+    section "R14. Threat Intel RAG"
+
+    # Rules file copied to shared volume by Suricata entrypoint
+    if [ -f "${LOG_DIR}/suricata/rules/suricata.rules" ]; then
+        RULES_SIZE=$(du -sh "${LOG_DIR}/suricata/rules/suricata.rules" 2>/dev/null | cut -f1)
+        pass "R44: suricata.rules exists on shared volume (${RULES_SIZE})"
+    else
+        warn "R44: suricata.rules not yet on shared volume (suricata-update may still be running)"
+    fi
+
+    # rag.duckdb exists
+    RAG_DB="${LOG_DIR}/duckdb/rag.duckdb"
+    if [ -f "$RAG_DB" ]; then
+        RAG_SIZE=$(du -sh "$RAG_DB" 2>/dev/null | cut -f1)
+        pass "R45: rag.duckdb exists (${RAG_SIZE})"
+    else
+        fail "R45: rag.duckdb not found (duckdb-mgr may not have initialized it)"
+    fi
+
+    # nomic-embed-text model available
+    EMBED_MODEL_CHECK=$(curl -sf "http://localhost:11434/api/tags" 2>/dev/null || echo "")
+    if echo "$EMBED_MODEL_CHECK" | grep -q "nomic-embed"; then
+        pass "R46: nomic-embed-text model available in Ollama"
+    else
+        warn "R46: nomic-embed-text not found in Ollama (run: ollama pull nomic-embed-text)"
+    fi
+
+    # rag_threat_intel table queryable
+    RAG_TBL=$(docker exec ids-streamlit python3 -c "
+import duckdb, os
+path = os.environ.get('RAG_DUCKDB_PATH', '/var/log/ids/duckdb/rag.duckdb')
+db = duckdb.connect(path, read_only=True)
+total = db.execute('SELECT count(*) FROM rag_threat_intel').fetchone()[0]
+embedded = db.execute('SELECT count(*) FROM rag_threat_intel WHERE embedding IS NOT NULL').fetchone()[0]
+db.close()
+print(f'OK:{total}:{embedded}')
+" 2>/dev/null || echo "ERROR")
+    if echo "$RAG_TBL" | grep -q "^OK:"; then
+        TOTAL_RULES=$(echo "$RAG_TBL" | cut -d: -f2)
+        EMBEDDED=$(echo "$RAG_TBL" | cut -d: -f3)
+        if [ "$EMBEDDED" -gt 0 ] 2>/dev/null; then
+            pass "R47: rag_threat_intel has $EMBEDDED embedded rules (${TOTAL_RULES} total)"
+        else
+            warn "R47: rag_threat_intel has $TOTAL_RULES rules but 0 embeddings (indexing may still be running)"
+        fi
+    else
+        warn "R47: rag_threat_intel table not queryable yet"
+    fi
+
+    # rag_search_threat_intel callable from streamlit (returns valid JSON)
+    RAG_SEARCH=$(docker exec ids-streamlit python3 -c "
+import sys, json, os
+sys.path.insert(0, '/app')
+os.environ.setdefault('RAG_DUCKDB_PATH', '/var/log/ids/duckdb/rag.duckdb')
+os.environ.setdefault('EMBED_MODEL', 'nomic-embed-text')
+os.environ.setdefault('OLLAMA_HOST', 'http://localhost:11434')
+from tools import rag_search_threat_intel
+result = json.loads(rag_search_threat_intel('nmap port scan detection', top_k=3))
+if 'results' in result:
+    print(f'OK:{len(result[\"results\"])}')
+else:
+    print(f'FAIL:{result}')
+" 2>/dev/null || echo "ERROR")
+    if echo "$RAG_SEARCH" | grep -q "^OK:"; then
+        RESULT_CT=$(echo "$RAG_SEARCH" | cut -d: -f2)
+        if [ "$RESULT_CT" -gt 0 ] 2>/dev/null; then
+            pass "R48: rag_search_threat_intel returns $RESULT_CT result(s)"
+        else
+            warn "R48: rag_search_threat_intel returned 0 results (indexing may still be in progress)"
+        fi
+    else
+        warn "R48: rag_search_threat_intel not yet functional: $RAG_SEARCH"
+    fi
+
+    # RAG indexer logged in duckdb-mgr
+    DUCKDB_LOGS=$(docker logs ids-duckdb-mgr 2>&1)
+    if echo "$DUCKDB_LOGS" | grep -q "RAG: indexer thread started"; then
+        pass "R49: RAG indexer thread started (seen in duckdb-mgr logs)"
+    elif echo "$DUCKDB_LOGS" | grep -q "RAG: indexing complete"; then
+        pass "R49: RAG indexing already complete (seen in duckdb-mgr logs)"
+    else
+        warn "R49: RAG indexer not yet started (nmap scan may still be blocking the cycle)"
+    fi
+
+    # Rules copy logged in Suricata
+    SURI_LOGS2=$(docker logs ids-suricata 2>&1)
+    if echo "$SURI_LOGS2" | grep -q "Rules copied to shared volume"; then
+        pass "R50: Suricata logged 'Rules copied to shared volume for RAG indexing'"
+    else
+        warn "R50: Rule copy log not yet seen (suricata-update may still be running)"
+    fi
+
+fi # end runtime tests
+
+# =============================================================================
+# Summary
+# =============================================================================
+
+echo ""
+echo "============================================================"
+TOTAL=$((PASS + FAIL + WARN))
+echo -e " Results: ${GREEN}${PASS} passed${NC}, ${RED}${FAIL} failed${NC}, ${YELLOW}${WARN} warnings${NC} (${TOTAL} total)"
+echo "============================================================"
+
+if [ $FAIL -gt 0 ]; then
+    echo -e " ${RED}SANITY TEST FAILED${NC}"
+    exit 1
+else
+    echo -e " ${GREEN}SANITY TEST PASSED${NC}"
+fi

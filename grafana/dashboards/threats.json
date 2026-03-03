@@ -1,0 +1,574 @@
+{
+  "uid": "ids-threats",
+  "title": "Threats & Correlation",
+  "tags": ["ids"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Anomaly Count",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(*) as value FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='anomaly' AND $__timeFilter(timestamp)",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "TLS Events",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(*) as value FROM events WHERE ((source_tool='suricata' AND json_extract_string(raw, '$.event_type')='tls') OR (source_tool='zeek' AND log_type='ssl')) AND $__timeFilter(timestamp)",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "blue",
+                "value": 1000
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Unique JA3 Hashes",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(DISTINCT json_extract_string(raw, '$.tls.ja3.hash')) as value FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='tls' AND $__timeFilter(timestamp)",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "blue",
+                "value": 50
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Anomaly Timeline",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT time_bucket(INTERVAL '5 minutes', timestamp) as time, count(*) as anomalies FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='anomaly' AND $__timeFilter(timestamp) GROUP BY time ORDER BY time",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showValues": "auto",
+          "calcs": []
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "piechart",
+      "title": "TLS Versions",
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT COALESCE(json_extract_string(raw, '$.tls.version'), json_extract_string(raw, '$.version')) as tls_version, count(*) as count FROM events WHERE ((source_tool='suricata' AND json_extract_string(raw, '$.event_type')='tls') OR (source_tool='zeek' AND log_type='ssl')) AND $__timeFilter(timestamp) GROUP BY tls_version ORDER BY count DESC",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [],
+          "fields": "/^count$/"
+        },
+        "pieType": "pie",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showValues": true,
+          "calcs": ["percent"],
+          "values": ["percent"]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Community-ID Cross-Reference: Alerts with Zeek Context",
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT a.timestamp as alert_time, json_extract_string(a.raw, '$.alert.signature') as alert_signature, CAST(json_extract(a.raw, '$.alert.severity') AS INTEGER) as severity, json_extract_string(a.raw, '$.src_ip') as src_ip, json_extract_string(a.raw, '$.dest_ip') as dest_ip, json_extract_string(a.raw, '$.community_id') as community_id, json_extract_string(z.raw, '$.duration') as zeek_duration, json_extract_string(z.raw, '$.orig_bytes') as zeek_orig_bytes, json_extract_string(z.raw, '$.resp_bytes') as zeek_resp_bytes, json_extract_string(z.raw, '$.conn_state') as zeek_conn_state FROM events a LEFT JOIN events z ON json_extract_string(a.raw, '$.community_id') = json_extract_string(z.raw, '$.community_id') AND z.source_tool='zeek' AND z.log_type='conn' WHERE a.source_tool='suricata' AND json_extract_string(a.raw, '$.event_type')='alert' AND $__timeFilter(a.timestamp) ORDER BY a.timestamp DESC LIMIT 50",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "severity"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 1
+                    },
+                    {
+                      "color": "orange",
+                      "value": 2
+                    },
+                    {
+                      "color": "red",
+                      "value": 3
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "alert_time",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Top TLS SNI Domains",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT json_extract_string(raw, '$.tls.sni') as sni, json_extract_string(raw, '$.tls.version') as version, count(*) as count FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='tls' AND json_extract_string(raw, '$.tls.sni') IS NOT NULL AND $__timeFilter(timestamp) GROUP BY sni, version ORDER BY count DESC LIMIT 20",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "count",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Top JA3 Fingerprints",
+      "gridPos": {
+        "x": 12,
+        "y": 25,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT json_extract_string(raw, '$.tls.ja3.hash') as ja3_hash, json_extract_string(raw, '$.tls.sni') as sample_sni, count(*) as count FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='tls' AND json_extract_string(raw, '$.tls.ja3.hash') IS NOT NULL AND $__timeFilter(timestamp) GROUP BY ja3_hash, sample_sni ORDER BY count DESC LIMIT 20",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "count",
+            "desc": true
+          }
+        ]
+      }
+    }
+  ]
+}

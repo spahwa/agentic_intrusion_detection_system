@@ -1,0 +1,67 @@
+# Vector pipeline — Phase 2: Ingest Suricata EVE + Zeek logs, normalize, stage as NDJSON
+
+sources:
+  suricata_eve:
+    type: file
+    include:
+      - /var/log/ids/suricata*/eve.json
+    read_from: beginning
+    fingerprint:
+      strategy: device_and_inode
+
+  zeek_logs:
+    type: file
+    include:
+      - /var/log/ids/zeek*/*.log
+    exclude:
+      - /var/log/ids/zeek*/packet_filter*.log
+      - /var/log/ids/zeek*/reporter*.log
+    read_from: beginning
+    fingerprint:
+      strategy: checksum
+
+transforms:
+  parse_suricata:
+    type: remap
+    inputs:
+      - suricata_eve
+    source: |
+      parsed = parse_json!(.message)
+      . = parsed
+      .source_tool = "suricata"
+      .log_type = "eve"
+
+  parse_zeek:
+    type: remap
+    inputs:
+      - zeek_logs
+    source: |
+      # Save the file path before overwriting with parsed JSON
+      file_path = string!(.file)
+      parsed = parse_json!(.message)
+      . = parsed
+      .source_tool = "zeek"
+      # Derive log_type from source file name: /var/log/ids/zeek[-*]/conn.2026-02-07-03-52-48.log -> conn
+      basename = replace(file_path, r'^.*/zeek[^/]*/', "")
+      .log_type = replace(basename, r'\..*$', "")
+      # Convert Zeek epoch ts to ISO 8601 timestamp
+      if exists(.ts) {
+        .timestamp, err = from_unix_timestamp(to_int(floor(to_float!(.ts))), unit: "seconds")
+      }
+
+sinks:
+  ndjson_suricata:
+    type: file
+    inputs:
+      - parse_suricata
+    path: "/var/log/ids/vector/suricata/eve/%Y-%m-%d-%H.ndjson"
+    encoding:
+      codec: json
+
+  ndjson_zeek:
+    type: file
+    inputs:
+      - parse_zeek
+    path: "/var/log/ids/vector/zeek/{{ log_type }}/%Y-%m-%d-%H.ndjson"
+    encoding:
+      codec: json

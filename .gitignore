@@ -1,0 +1,41 @@
+# Secrets — credentials and sensitive config
+.env
+secrets/gmail_user.txt
+secrets/gmail_app_password.txt
+secrets/alert_recipient.txt
+
+# Keep the secrets directory and its README in git
+!secrets/
+!secrets/README.md
+
+# Runtime data and databases
+/var/log/ids/
+*.duckdb
+*.duckdb.wal
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Docker build artifacts
+.dockerignore
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

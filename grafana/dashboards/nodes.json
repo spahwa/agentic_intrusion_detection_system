@@ -1,0 +1,471 @@
+{
+  "uid": "ids-nodes",
+  "title": "Network Nodes",
+  "tags": ["ids"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "show_mac",
+        "type": "custom",
+        "label": "MAC Addresses",
+        "query": "Hidden,Visible",
+        "current": { "text": "Hidden", "value": "Hidden" },
+        "options": [
+          { "text": "Hidden", "value": "Hidden", "selected": true },
+          { "text": "Visible", "value": "Visible", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "show_manufacturer",
+        "type": "custom",
+        "label": "Manufacturer",
+        "query": "Hidden,Visible",
+        "current": { "text": "Hidden", "value": "Hidden" },
+        "options": [
+          { "text": "Hidden", "value": "Hidden", "selected": true },
+          { "text": "Visible", "value": "Visible", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "show_hostname",
+        "type": "custom",
+        "label": "Hostname",
+        "query": "Hidden,Visible",
+        "current": { "text": "Hidden", "value": "Hidden" },
+        "options": [
+          { "text": "Hidden", "value": "Hidden", "selected": true },
+          { "text": "Visible", "value": "Visible", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Unique Internal IPs",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(*) as value FROM devices",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "orange", "value": 50 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Unique External IPs",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(*) as value FROM external_ips",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "orange", "value": 500 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "DHCP Assignments",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(*) as value FROM events WHERE source_tool='zeek' AND log_type='dhcp' AND $__timeFilter(timestamp)",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "blue", "value": 1 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "New IPs Over Time",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT time_bucket(INTERVAL '1 hour', first_seen) as time, count(*) as new_ips FROM (\n  SELECT COALESCE(json_extract_string(raw, '$.src_ip'), json_extract_string(raw, '$.\"id.orig_h\"')) as ip, min(timestamp) as first_seen\n  FROM events WHERE COALESCE(json_extract_string(raw, '$.src_ip'), json_extract_string(raw, '$.\"id.orig_h\"')) IS NOT NULL AND $__timeFilter(timestamp)\n  GROUP BY ip\n) GROUP BY 1 ORDER BY 1",
+          "format": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [ { "color": "green", "value": null } ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showValues": "auto", "calcs": [] }
+      }
+    },
+    {
+      "id": 5,
+      "type": "piechart",
+      "title": "Internal vs External Traffic",
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT CASE WHEN COALESCE(json_extract_string(raw, '$.dest_ip'), json_extract_string(raw, '$.\"id.resp_h\"')) LIKE '192.168.%' THEN 'Internal' ELSE 'External' END as direction, count(*) as count\nFROM events WHERE COALESCE(json_extract_string(raw, '$.dest_ip'), json_extract_string(raw, '$.\"id.resp_h\"')) IS NOT NULL AND $__timeFilter(timestamp) GROUP BY direction",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [ { "color": "green", "value": null } ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": true, "calcs": [], "fields": "/^count$/" },
+        "pieType": "pie",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showValues": true,
+          "calcs": ["percent"],
+          "values": ["percent"]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Device Inventory",
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT ip, CASE WHEN '${show_mac}' = 'Visible' THEN mac ELSE regexp_replace(COALESCE(mac, 'N/A'), '[0-9a-fA-F]', '*', 'g') END AS mac, CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(manufacturer, 'Unknown') ELSE '***' END AS manufacturer, CASE WHEN '${show_hostname}' = 'Visible' THEN COALESCE(hostname, 'N/A') ELSE '***' END AS hostname, total_conns, total_bytes, protocols, services FROM devices ORDER BY total_conns DESC LIMIT 50",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [ { "color": "green", "value": null } ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "total_bytes" },
+            "properties": [
+              { "id": "unit", "value": "decbytes" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [ { "displayName": "total_conns", "desc": true } ],
+        "cellHeight": "sm",
+        "footer": { "show": false, "reducer": ["sum"], "fields": "" }
+      }
+    },
+    {
+      "id": 7,
+      "type": "barchart",
+      "title": "Top 5 Noisiest Devices",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(manufacturer, 'Unknown') || ' (' || ip || ')' ELSE ip END AS device, total_conns, total_bytes FROM devices ORDER BY total_bytes DESC LIMIT 5",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [ { "color": "green", "value": null } ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "total_bytes" },
+            "properties": [
+              { "id": "unit", "value": "decbytes" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "xTickLabelMaxLength": 40,
+        "barWidth": 0.7,
+        "groupWidth": 0.7,
+        "stacking": "none",
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "showValue": "auto"
+      }
+    },
+    {
+      "id": 8,
+      "type": "piechart",
+      "title": "Devices by Manufacturer",
+      "gridPos": {
+        "x": 12,
+        "y": 25,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(manufacturer, 'Unknown') ELSE '***' END AS manufacturer, count(*) AS count FROM devices GROUP BY 1 ORDER BY 2 DESC",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [ { "color": "green", "value": null } ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": true, "calcs": [], "fields": "/^count$/" },
+        "pieType": "pie",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showValues": true,
+          "calcs": ["percent"],
+          "values": ["percent"]
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "DHCP Leases",
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT timestamp, json_extract_string(raw, '$.assigned_addr') as assigned_ip, CASE WHEN '${show_mac}' = 'Visible' THEN json_extract_string(raw, '$.mac') ELSE regexp_replace(COALESCE(json_extract_string(raw, '$.mac'), 'N/A'), '[0-9a-fA-F]', '*', 'g') END as mac_address, json_extract_string(raw, '$.server_addr') as dhcp_server, json_extract_string(raw, '$.domain') as domain, CAST(json_extract(raw, '$.lease_time') AS DOUBLE) as lease_seconds\nFROM events WHERE source_tool='zeek' AND log_type='dhcp' AND $__timeFilter(timestamp) ORDER BY timestamp DESC LIMIT 50",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [ { "color": "green", "value": null } ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [ { "displayName": "timestamp", "desc": true } ],
+        "cellHeight": "sm",
+        "footer": { "show": false, "reducer": ["sum"], "fields": "" }
+      }
+    }
+  ]
+}

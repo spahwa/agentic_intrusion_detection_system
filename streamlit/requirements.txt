@@ -1,0 +1,4 @@
+ollama>=0.4.7
+streamlit>=1.40.0
+duckdb==1.4.4
+apprise>=1.8.0

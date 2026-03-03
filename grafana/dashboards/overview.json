@@ -1,0 +1,663 @@
+{
+  "uid": "ids-overview",
+  "title": "IDS Overview",
+  "tags": ["ids"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "show_mac",
+        "type": "custom",
+        "label": "MAC Addresses",
+        "query": "Hidden,Visible",
+        "current": { "text": "Hidden", "value": "Hidden" },
+        "options": [
+          { "text": "Hidden", "value": "Hidden", "selected": true },
+          { "text": "Visible", "value": "Visible", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "show_manufacturer",
+        "type": "custom",
+        "label": "Manufacturer",
+        "query": "Hidden,Visible",
+        "current": { "text": "Hidden", "value": "Hidden" },
+        "options": [
+          { "text": "Hidden", "value": "Hidden", "selected": true },
+          { "text": "Visible", "value": "Visible", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "show_hostname",
+        "type": "custom",
+        "label": "Hostname",
+        "query": "Hidden,Visible",
+        "current": { "text": "Hidden", "value": "Hidden" },
+        "options": [
+          { "text": "Hidden", "value": "Hidden", "selected": true },
+          { "text": "Visible", "value": "Visible", "selected": false }
+        ],
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Events (24h)",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(*) as value FROM events WHERE timestamp > now() - INTERVAL '24 hours'",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "blue",
+                "value": 1000
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Suricata Alerts",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(*) as value FROM events WHERE source_tool = 'suricata' AND json_extract_string(raw, '$.event_type') = 'alert' AND $__timeFilter(timestamp)",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Unique Source IPs",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(DISTINCT COALESCE(json_extract_string(raw, '$.src_ip'), json_extract_string(raw, '$.\"id.orig_h\"'))) as value FROM events WHERE $__timeFilter(timestamp)",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "orange",
+                "value": 200
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "links": [
+            {
+              "title": "View Network Nodes",
+              "url": "/d/ids-nodes/network-nodes"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Unique Dest IPs",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(DISTINCT COALESCE(json_extract_string(raw, '$.dest_ip'), json_extract_string(raw, '$.\"id.resp_h\"'))) as value FROM events WHERE $__timeFilter(timestamp)",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "orange",
+                "value": 200
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "links": [
+            {
+              "title": "View External IPs",
+              "url": "/d/ids-external-geoip/external-access-geoip"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Events Over Time",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT time_bucket(INTERVAL '5 minutes', timestamp) as time, source_tool, count(*) as count FROM events WHERE $__timeFilter(timestamp) GROUP BY 1, 2 ORDER BY 1",
+          "format": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showValues": "auto",
+          "calcs": []
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "piechart",
+      "title": "Event Types",
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT CASE WHEN source_tool = 'suricata' THEN json_extract_string(raw, '$.event_type') ELSE log_type END as event_type, count(*) as count FROM events WHERE $__timeFilter(timestamp) GROUP BY event_type ORDER BY count DESC LIMIT 15",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [],
+          "fields": "/^count$/"
+        },
+        "pieType": "pie",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showValues": true,
+          "calcs": ["percent"],
+          "values": ["percent"]
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "piechart",
+      "title": "Protocol Distribution",
+      "gridPos": {
+        "x": 8,
+        "y": 14,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT COALESCE(LOWER(json_extract_string(raw, '$.proto')), 'unknown') as protocol, count(*) as count FROM events WHERE json_extract_string(raw, '$.proto') IS NOT NULL AND $__timeFilter(timestamp) GROUP BY protocol ORDER BY count DESC LIMIT 10",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [],
+          "fields": "/^count$/"
+        },
+        "pieType": "pie",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showValues": true,
+          "calcs": ["percent"],
+          "values": ["percent"]
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "piechart",
+      "title": "Source Tool Split",
+      "gridPos": {
+        "x": 16,
+        "y": 14,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT source_tool, count(*) as count FROM events WHERE $__timeFilter(timestamp) GROUP BY source_tool",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [],
+          "fields": "/^count$/"
+        },
+        "pieType": "pie",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showValues": true,
+          "calcs": ["percent"],
+          "values": ["percent"]
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Internal Devices (Source IPs)",
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT ip AS \"IP\", CASE WHEN '${show_mac}' = 'Visible' THEN mac ELSE regexp_replace(COALESCE(mac, 'N/A'), '[0-9a-fA-F]', '*', 'g') END AS \"MAC\", CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(manufacturer, 'Unknown') ELSE '***' END AS \"Manufacturer\", CASE WHEN '${show_hostname}' = 'Visible' THEN COALESCE(hostname, 'N/A') ELSE '***' END AS \"Hostname\", total_conns AS \"Connections\", CAST(total_bytes AS BIGINT) AS \"Bytes\" FROM devices ORDER BY total_conns DESC",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          },
+          "links": [
+            {
+              "title": "View device detail",
+              "url": "/d/ids-device-detail/device-detail?var-device_ip=${__data.fields.IP}"
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "Bytes"},
+            "properties": [
+              {"id": "unit", "value": "decbytes"}
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{"displayName": "Connections", "desc": true}],
+        "footer": {
+          "show": true,
+          "countRows": true,
+          "reducer": ["count"]
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "External IPs (Destinations)",
+      "gridPos": {
+        "x": 12,
+        "y": 22,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT ip AS \"IP\", country AS \"Country\", total_conns AS \"Connections\", CAST(total_bytes AS BIGINT) AS \"Bytes\", contacted_by AS \"Contacted By\", top_service AS \"Service\" FROM external_ips ORDER BY total_conns DESC",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "Bytes"},
+            "properties": [
+              {"id": "unit", "value": "decbytes"}
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{"displayName": "Connections", "desc": true}],
+        "footer": {
+          "show": true,
+          "countRows": true,
+          "reducer": ["count"]
+        }
+      }
+    }
+  ]
+}

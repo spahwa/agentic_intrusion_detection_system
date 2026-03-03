@@ -1,0 +1,608 @@
+{
+  "uid": "ids-alerts",
+  "title": "Alerts",
+  "tags": ["ids"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Alerts",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT count(*) as value FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='alert' AND $__timeFilter(timestamp)",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "High Severity",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT count(*) as value FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='alert' AND CAST(json_extract(raw, '$.alert.severity') AS INTEGER)=1 AND $__timeFilter(timestamp)",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Unique Signatures",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT count(DISTINCT json_extract_string(raw, '$.alert.signature')) as value FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='alert' AND $__timeFilter(timestamp)",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "type": "barchart",
+      "title": "Alert Severity Distribution",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT CASE CAST(json_extract(raw, '$.alert.severity') AS INTEGER) WHEN 1 THEN 'High' WHEN 2 THEN 'Medium' WHEN 3 THEN 'Low' ELSE 'Unknown' END as severity, count(*) as count FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='alert' AND $__timeFilter(timestamp) GROUP BY severity ORDER BY count DESC",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.8,
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0
+      }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Top 10 Alert Signatures",
+      "gridPos": {
+        "x": 8,
+        "y": 5,
+        "w": 16,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT json_extract_string(raw, '$.alert.signature') as signature, json_extract_string(raw, '$.alert.category') as category, CAST(json_extract(raw, '$.alert.severity') AS INTEGER) as severity, count(*) as count FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='alert' AND $__timeFilter(timestamp) GROUP BY signature, category, severity ORDER BY count DESC LIMIT 10",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "severity"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 2
+                    },
+                    {
+                      "color": "red",
+                      "value": 3
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false
+        },
+        "sortBy": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Alert Timeline",
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT time_bucket(INTERVAL '5 minutes', timestamp) as time, CASE CAST(json_extract(raw, '$.alert.severity') AS INTEGER) WHEN 1 THEN 'High' WHEN 2 THEN 'Medium' WHEN 3 THEN 'Low' ELSE 'Unknown' END as severity, count(*) as count FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='alert' AND $__timeFilter(timestamp) GROUP BY time, severity ORDER BY time",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Top Source IPs",
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT json_extract_string(raw, '$.src_ip') as source_ip, count(*) as alerts FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='alert' AND $__timeFilter(timestamp) GROUP BY source_ip ORDER BY alerts DESC LIMIT 10",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false
+        },
+        "sortBy": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Top Dest IPs",
+      "gridPos": {
+        "x": 8,
+        "y": 23,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT json_extract_string(raw, '$.dest_ip') as dest_ip, count(*) as alerts FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='alert' AND $__timeFilter(timestamp) GROUP BY dest_ip ORDER BY alerts DESC LIMIT 10",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false
+        },
+        "sortBy": []
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Recent Alerts",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT timestamp, json_extract_string(raw, '$.alert.signature') as signature, CAST(json_extract(raw, '$.alert.severity') AS INTEGER) as severity, json_extract_string(raw, '$.src_ip') as src_ip, json_extract_string(raw, '$.dest_ip') as dest_ip, json_extract_string(raw, '$.dest_port') as dest_port, json_extract_string(raw, '$.proto') as proto FROM events WHERE source_tool='suricata' AND json_extract_string(raw, '$.event_type')='alert' AND $__timeFilter(timestamp) ORDER BY timestamp DESC LIMIT 50",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "severity"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 2
+                    },
+                    {
+                      "color": "red",
+                      "value": 3
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "timestamp"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false
+        },
+        "sortBy": [
+          {
+            "displayName": "timestamp",
+            "desc": true
+          }
+        ]
+      }
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "links": [],
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "weekStart": ""
+}

@@ -1,0 +1,141 @@
+%YAML 1.1
+---
+
+vars:
+  address-groups:
+    HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
+    EXTERNAL_NET: "!$HOME_NET"
+    HTTP_SERVERS: "$HOME_NET"
+    SMTP_SERVERS: "$HOME_NET"
+    SQL_SERVERS: "$HOME_NET"
+    DNS_SERVERS: "$HOME_NET"
+    TELNET_SERVERS: "$HOME_NET"
+    AIM_SERVERS: "$EXTERNAL_NET"
+    DC_SERVERS: "$HOME_NET"
+    DNP3_SERVER: "$HOME_NET"
+    DNP3_CLIENT: "$HOME_NET"
+    MODBUS_CLIENT: "$HOME_NET"
+    MODBUS_SERVER: "$HOME_NET"
+    ENIP_CLIENT: "$HOME_NET"
+    ENIP_SERVER: "$HOME_NET"
+
+  port-groups:
+    HTTP_PORTS: "80"
+    SHELLCODE_PORTS: "!80"
+    ORACLE_PORTS: 1521
+    SSH_PORTS: 22
+    DNP3_PORTS: 20000
+    MODBUS_PORTS: 502
+    FILE_DATA_PORTS: "[$HTTP_PORTS,110,143]"
+    FTP_PORTS: 21
+    GENEVE_PORTS: 6081
+    VXLAN_PORTS: 4789
+    TEREDO_PORTS: 3544
+
+default-log-dir: /var/log/ids/suricata/
+
+stats:
+  enabled: no
+
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      community-id: true
+      community-id-seed: 0
+      types:
+        - alert:
+            tagged-packets: yes
+        - anomaly:
+            enabled: yes
+            types:
+              decode: yes
+              stream: yes
+              applayer: yes
+        - http:
+            extended: yes
+        - dns:
+            version: 2
+        - tls:
+            extended: yes
+        - files:
+            force-magic: no
+            force-hash: [md5, sha256]
+        - smtp:
+            extended: yes
+
+  - fast:
+      enabled: no
+
+  - unified2-alert:
+      enabled: no
+
+af-packet:
+  - interface: default
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+
+pcap-file:
+  checksum-checks: auto
+
+app-layer:
+  protocols:
+    http:
+      enabled: yes
+    tls:
+      enabled: yes
+      detection-ports:
+        dp: 443
+    dns:
+      enabled: yes
+      tcp:
+        enabled: yes
+      udp:
+        enabled: yes
+    ssh:
+      enabled: yes
+    smtp:
+      enabled: yes
+    ftp:
+      enabled: yes
+    dhcp:
+      enabled: yes
+    nfs:
+      enabled: yes
+    smb:
+      enabled: yes
+    ikev2:
+      enabled: yes
+    krb5:
+      enabled: yes
+    snmp:
+      enabled: yes
+    sip:
+      enabled: yes
+    rfb:
+      enabled: yes
+    mqtt:
+      enabled: yes
+    rdp:
+      enabled: yes
+
+detect:
+  profile: medium
+  custom-values:
+    toclient-groups: 3
+    toserver-groups: 25
+  sgh-mpm-context: auto
+  inspection-recursion-limit: 3000
+
+threading:
+  set-cpu-affinity: no
+  detect-thread-ratio: 1.0
+
+default-rule-path: /var/lib/suricata/rules
+rule-files:
+  - suricata.rules
+  - /etc/suricata/rules/custom.rules

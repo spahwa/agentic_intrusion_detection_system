@@ -1,0 +1,370 @@
+services:
+  suricata:
+    build:
+      context: ./suricata
+      args:
+        SURICATA_TAG: ${SURICATA_TAG:-7.0.8}
+    container_name: ids-suricata
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    environment:
+      - NETWORK_INTERFACE=${NETWORK_INTERFACE:-enp1s0f0}
+      - HOME_NET=${HOME_NET:-192.168.0.0/16}
+      - MAX_EVE_SIZE_MB=${MAX_EVE_SIZE_MB:-200}
+      - RULE_UPDATE_INTERVAL_HOURS=${RULE_UPDATE_INTERVAL_HOURS:-24}
+    volumes:
+      - ${LOG_DIR:-/var/log/ids}:/var/log/ids
+      - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml
+      - ./suricata/rules/custom.rules:/etc/suricata/rules/custom.rules
+    healthcheck:
+      test: ["CMD", "pidof", "suricata"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  zeek:
+    build:
+      context: ./zeek
+      args:
+        ZEEK_TAG: ${ZEEK_TAG:-7.0.4}
+    container_name: ids-zeek
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - NETWORK_INTERFACE=${NETWORK_INTERFACE:-enp1s0f0}
+    volumes:
+      - ${LOG_DIR:-/var/log/ids}:/var/log/ids
+      - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
+    healthcheck:
+      test: ["CMD", "pidof", "zeek"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- Phase 2: Data Pipeline ---
+
+  vector:
+    image: timberio/vector:${VECTOR_TAG:-0.53.0-alpine}
+    container_name: ids-vector
+    volumes:
+      - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - ${LOG_DIR:-/var/log/ids}:/var/log/ids
+    command: ["--config", "/etc/vector/vector.yaml"]
+    depends_on:
+      - suricata
+      - zeek
+    healthcheck:
+      test: ["CMD", "pgrep", "vector"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  duckdb-mgr:
+    build: ./duckdb-mgr
+    container_name: ids-duckdb-mgr
+    network_mode: host
+    environment:
+      - DUCKDB_PATH=/var/log/ids/duckdb/ids.duckdb
+      - VECTOR_STAGING_DIR=/var/log/ids/vector
+      - ZEEK_LOG_DIR=/var/log/ids/zeek
+      - TTL_HOURS=${DUCKDB_TTL_HOURS:-72}
+      - STAGING_RETENTION_HOURS=${STAGING_RETENTION_HOURS:-6}
+      - MAX_DB_SIZE_MB=${MAX_DB_SIZE_MB:-4000}
+      - INGEST_INTERVAL_SECONDS=10
+      - SPIKE_RATIO=${SPIKE_RATIO:-5.0}
+      - SPIKE_MIN_CONNS=${SPIKE_MIN_CONNS:-1000}
+      - SPIKE_COOLDOWN_MIN=${SPIKE_COOLDOWN_MIN:-60}
+      - VOLUME_THRESHOLD_MB=${VOLUME_THRESHOLD_MB:-500}
+      - VOLUME_COOLDOWN_MIN=${VOLUME_COOLDOWN_MIN:-60}
+      - SUSPICIOUS_COUNTRIES=${SUSPICIOUS_COUNTRIES:-CN,RU,KP,IR,BY}
+      - COUNTRY_COOLDOWN_MIN=${COUNTRY_COOLDOWN_MIN:-60}
+      - BEHAVIOR_RATIO=${BEHAVIOR_RATIO:-10.0}
+      - BEHAVIOR_MIN_SAMPLES=${BEHAVIOR_MIN_SAMPLES:-3}
+      - FANOUT_RATIO=${FANOUT_RATIO:-5.0}
+      - FANOUT_MIN_IPS=${FANOUT_MIN_IPS:-10}
+      - BASELINE_EMA_ALPHA=${BASELINE_EMA_ALPHA:-0.3}
+      - NMAP_SUBNET=${NMAP_SUBNET:-192.168.2.0/24}
+      - NMAP_SCAN_INTERVAL_HOURS=${NMAP_SCAN_INTERVAL_HOURS:-168}
+      - OLLAMA_HOST=http://localhost:11434
+      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
+      - RAG_DUCKDB_PATH=/var/log/ids/duckdb/rag.duckdb
+      - RAG_AUTO_INDEX=${RAG_AUTO_INDEX:-false}
+    volumes:
+      - ${LOG_DIR:-/var/log/ids}:/var/log/ids
+    depends_on:
+      - vector
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/log/ids/duckdb/ids.duckdb"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- Phase 2.5: Grafana Dashboards ---
+
+  grafana:
+    build: ./grafana
+    container_name: ids-grafana
+    environment:
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=motherduck-duckdb-datasource
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/overview.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ${LOG_DIR:-/var/log/ids}/duckdb:/var/log/ids/duckdb
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - duckdb-mgr
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- Phase 3: Agentic Intelligence ---
+
+  streamlit:
+    build: ./streamlit
+    container_name: ids-streamlit
+    network_mode: host
+    environment:
+      - OLLAMA_HOST=http://localhost:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+      - DUCKDB_PATH=/var/log/ids/duckdb/ids_streamlit.duckdb
+      - WHITELIST_PATH=/var/log/ids/duckdb/whitelist.db
+      - APPRISE_URLS=${APPRISE_URLS:-}
+      - NMAP_RESULTS_PATH=/var/log/ids/duckdb/nmap_results.db
+      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
+      - RAG_DUCKDB_PATH=/var/log/ids/duckdb/rag.duckdb
+    secrets:
+      - gmail_user
+      - gmail_app_password
+      - alert_recipient
+    volumes:
+      - ${LOG_DIR:-/var/log/ids}/duckdb:/var/log/ids/duckdb
+    depends_on:
+      - duckdb-mgr
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- Phase 3b: Agentic Alerts ---
+
+  alert-agent:
+    build: ./alert-agent
+    container_name: ids-alert-agent
+    network_mode: host
+    environment:
+      - OLLAMA_HOST=http://localhost:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+      - DUCKDB_PATH=/var/log/ids/duckdb/ids_alert.duckdb
+      - ALERT_STATE_PATH=/var/log/ids/duckdb/alert_state.db
+      - FAST_ALERTS_PATH=/var/log/ids/duckdb/fast_alerts.db
+      - POLL_INTERVAL=10
+      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
+      - RAG_DUCKDB_PATH=/var/log/ids/duckdb/rag.duckdb
+    secrets:
+      - gmail_user
+      - gmail_app_password
+      - alert_recipient
+    volumes:
+      - ${LOG_DIR:-/var/log/ids}/duckdb:/var/log/ids/duckdb
+    depends_on:
+      - duckdb-mgr
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/log/ids/duckdb/alert_state.db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- Dual-interface services (activate with: docker compose --profile dual up -d) ---
+
+  suricata-wifi:
+    build:
+      context: ./suricata
+      args:
+        SURICATA_TAG: ${SURICATA_TAG:-7.0.8}
+    container_name: ids-suricata-wifi
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    environment:
+      - NETWORK_INTERFACE=${NETWORK_INTERFACE_2:-wlp2s0}
+      - HOME_NET=${HOME_NET:-192.168.0.0/16}
+      - MAX_EVE_SIZE_MB=${MAX_EVE_SIZE_MB:-200}
+      - RULE_UPDATE_INTERVAL_HOURS=${RULE_UPDATE_INTERVAL_HOURS:-24}
+      - LOG_SUBDIR=suricata-wifi
+    volumes:
+      - ${LOG_DIR:-/var/log/ids}:/var/log/ids
+      - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml
+      - ./suricata/rules/custom.rules:/etc/suricata/rules/custom.rules
+    restart: unless-stopped
+    profiles: ["dual"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  zeek-wifi:
+    build:
+      context: ./zeek
+      args:
+        ZEEK_TAG: ${ZEEK_TAG:-7.0.4}
+    container_name: ids-zeek-wifi
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - NETWORK_INTERFACE=${NETWORK_INTERFACE_2:-wlp2s0}
+      - LOG_SUBDIR=zeek-wifi
+    volumes:
+      - ${LOG_DIR:-/var/log/ids}:/var/log/ids
+      - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
+    restart: unless-stopped
+    profiles: ["dual"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- virbr0 interface services (activate with: docker compose --profile virbr up -d) ---
+
+  suricata-virbr:
+    build:
+      context: ./suricata
+      args:
+        SURICATA_TAG: ${SURICATA_TAG:-7.0.8}
+    container_name: ids-suricata-virbr
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    environment:
+      - NETWORK_INTERFACE=${NETWORK_INTERFACE_3:-virbr0}
+      - HOME_NET=${HOME_NET:-192.168.0.0/16}
+      - MAX_EVE_SIZE_MB=${MAX_EVE_SIZE_MB:-200}
+      - RULE_UPDATE_INTERVAL_HOURS=${RULE_UPDATE_INTERVAL_HOURS:-24}
+      - LOG_SUBDIR=suricata-virbr
+    volumes:
+      - ${LOG_DIR:-/var/log/ids}:/var/log/ids
+      - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml
+      - ./suricata/rules/custom.rules:/etc/suricata/rules/custom.rules
+    healthcheck:
+      test: ["CMD", "pidof", "suricata"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    profiles: ["virbr"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  zeek-virbr:
+    build:
+      context: ./zeek
+      args:
+        ZEEK_TAG: ${ZEEK_TAG:-7.0.4}
+    container_name: ids-zeek-virbr
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - NETWORK_INTERFACE=${NETWORK_INTERFACE_3:-virbr0}
+      - LOG_SUBDIR=zeek-virbr
+    volumes:
+      - ${LOG_DIR:-/var/log/ids}:/var/log/ids
+      - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
+    healthcheck:
+      test: ["CMD", "pidof", "zeek"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    profiles: ["virbr"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  gmail_user:
+    file: ./secrets/gmail_user.txt
+  gmail_app_password:
+    file: ./secrets/gmail_app_password.txt
+  alert_recipient:
+    file: ./secrets/alert_recipient.txt
+
+volumes:
+  grafana-data:

@@ -1,0 +1,418 @@
+{
+  "uid": "ids-network-traffic",
+  "title": "Network Traffic",
+  "tags": ["ids"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Connections",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT count(*) as value FROM events WHERE (source_tool='zeek' AND log_type='conn') AND $__timeFilter(timestamp)",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Total Bytes",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT SUM(COALESCE(CAST(json_extract(raw, '$.orig_bytes') AS BIGINT),0) + COALESCE(CAST(json_extract(raw, '$.resp_bytes') AS BIGINT),0)) as value FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp)",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Unique Protocols",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT count(DISTINCT LOWER(json_extract_string(raw, '$.proto'))) as value FROM events WHERE json_extract_string(raw, '$.proto') IS NOT NULL AND $__timeFilter(timestamp)",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Traffic Volume Over Time",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 16,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT time_bucket(INTERVAL '5 minutes', timestamp) as time, json_extract_string(raw, '$.proto') as protocol, SUM(COALESCE(CAST(json_extract(raw, '$.orig_bytes') AS BIGINT),0) + COALESCE(CAST(json_extract(raw, '$.resp_bytes') AS BIGINT),0)) as bytes FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) GROUP BY time, protocol ORDER BY time",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "piechart",
+      "title": "Protocol Distribution",
+      "gridPos": {
+        "x": 16,
+        "y": 5,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT LOWER(json_extract_string(raw, '$.proto')) as protocol, count(*) as count FROM events WHERE json_extract_string(raw, '$.proto') IS NOT NULL AND $__timeFilter(timestamp) GROUP BY protocol ORDER BY count DESC LIMIT 10",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": true
+        },
+        "pieType": "pie",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "calcs": []
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Top 10 Source IPs",
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT json_extract_string(raw, '$.\"id.orig_h\"') as source_ip, count(*) as connections FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) GROUP BY source_ip ORDER BY connections DESC LIMIT 10",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "connections",
+            "desc": true
+          }
+        ],
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Top 10 Dest IPs",
+      "gridPos": {
+        "x": 8,
+        "y": 14,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT json_extract_string(raw, '$.\"id.resp_h\"') as dest_ip, count(*) as connections FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) GROUP BY dest_ip ORDER BY connections DESC LIMIT 10",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "connections",
+            "desc": true
+          }
+        ],
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Top 10 Dest Ports",
+      "gridPos": {
+        "x": 16,
+        "y": 14,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT json_extract_string(raw, '$.\"id.resp_p\"') as dest_port, count(*) as connections FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) GROUP BY dest_port ORDER BY connections DESC LIMIT 10",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "connections",
+            "desc": true
+          }
+        ],
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Recent Connections",
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT timestamp, json_extract_string(raw, '$.\"id.orig_h\"') as src_ip, json_extract_string(raw, '$.\"id.resp_h\"') as dest_ip, json_extract_string(raw, '$.\"id.resp_p\"') as dest_port, json_extract_string(raw, '$.proto') as proto, json_extract_string(raw, '$.service') as service, json_extract_string(raw, '$.community_id') as community_id, json_extract_string(raw, '$.conn_state') as state FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) ORDER BY timestamp DESC LIMIT 50",
+          "format": 0,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "timestamp",
+            "desc": true
+          }
+        ],
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "links": [],
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "weekStart": ""
+}

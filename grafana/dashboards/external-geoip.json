@@ -1,0 +1,332 @@
+{
+  "uid": "ids-external-geoip",
+  "title": "External Access & GeoIP",
+  "tags": ["ids"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Unique Countries",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(DISTINCT country) AS value FROM external_ips WHERE country IS NOT NULL",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 20 },
+              { "color": "orange", "value": 50 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Unique External IPs",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT count(*) AS value FROM external_ips",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "orange", "value": 500 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total External Bytes",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT CAST(COALESCE(sum(total_bytes), 0) AS BIGINT) AS value FROM external_ips",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1073741824 },
+              { "color": "red", "value": 10737418240 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "External Connections",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT CAST(COALESCE(sum(total_conns), 0) AS BIGINT) AS value FROM external_ips",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10000 },
+              { "color": "red", "value": 100000 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "type": "barchart",
+      "title": "Top Countries by Connections",
+      "gridPos": { "x": 0, "y": 5, "w": 12, "h": 8 },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT COALESCE(country, '??') AS country, CAST(sum(total_conns) AS BIGINT) AS connections FROM external_ips GROUP BY country ORDER BY connections DESC LIMIT 15",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "xTickLabelMaxLength": 20,
+        "barWidth": 0.7,
+        "groupWidth": 0.7,
+        "stacking": "none",
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "showValue": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "type": "piechart",
+      "title": "Top Countries by Bytes",
+      "gridPos": { "x": 12, "y": 5, "w": 12, "h": 8 },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT COALESCE(country, '??') AS country, CAST(sum(total_bytes) AS BIGINT) AS bytes FROM external_ips GROUP BY country ORDER BY bytes DESC LIMIT 15",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "bytes" },
+            "properties": [{ "id": "unit", "value": "decbytes" }]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": { "values": true, "calcs": [], "fields": "/^bytes$/" },
+        "pieType": "pie",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showValues": true,
+          "calcs": ["percent"],
+          "values": ["percent"]
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Top 20 External IPs",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 10 },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT ip, COALESCE(country, '??') AS country, total_conns AS connections, total_bytes AS bytes, contacted_by AS internal_clients, top_service AS service, top_dest_port AS port FROM external_ips ORDER BY total_conns DESC LIMIT 20",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "bytes" },
+            "properties": [{ "id": "unit", "value": "decbytes" }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "connections", "desc": true }],
+        "cellHeight": "sm",
+        "footer": { "show": false, "reducer": ["sum"], "fields": "" }
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Unsolicited Inbound Connections",
+      "description": "External IPs initiating connections TO internal devices (potential scans or attacks)",
+      "gridPos": { "x": 0, "y": 25, "w": 24, "h": 10 },
+      "datasource": {
+        "uid": "duckdb-ids",
+        "type": "motherduck-duckdb-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT\n  json_extract_string(raw, '$.\"id.orig_h\"') AS source_ip,\n  e2.country,\n  json_extract_string(raw, '$.\"id.resp_h\"') AS dest_ip,\n  TRY_CAST(json_extract(raw, '$.\"id.resp_p\"') AS INTEGER) AS dest_port,\n  json_extract_string(raw, '$.service') AS service,\n  json_extract_string(raw, '$.proto') AS proto,\n  count(*) AS connections\nFROM events\nLEFT JOIN external_ips e2 ON e2.ip = json_extract_string(raw, '$.\"id.orig_h\"')\nWHERE source_tool = 'zeek' AND log_type = 'conn'\n  AND json_extract_string(raw, '$.\"id.orig_h\"') NOT LIKE '192.168.%'\n  AND json_extract_string(raw, '$.\"id.orig_h\"') NOT LIKE '10.%'\n  AND json_extract_string(raw, '$.\"id.orig_h\"') NOT LIKE '172.16.%'\n  AND json_extract_string(raw, '$.\"id.orig_h\"') NOT LIKE '172.17.%'\n  AND json_extract_string(raw, '$.\"id.orig_h\"') NOT LIKE '172.18.%'\n  AND json_extract_string(raw, '$.\"id.orig_h\"') NOT LIKE '172.19.%'\n  AND json_extract_string(raw, '$.\"id.orig_h\"') NOT LIKE '172.2_.%'\n  AND json_extract_string(raw, '$.\"id.orig_h\"') NOT LIKE '172.30.%'\n  AND json_extract_string(raw, '$.\"id.orig_h\"') NOT LIKE '172.31.%'\n  AND json_extract_string(raw, '$.\"id.orig_h\"') NOT LIKE 'fe80:%'\n  AND (json_extract_string(raw, '$.\"id.resp_h\"') LIKE '192.168.%' OR json_extract_string(raw, '$.\"id.resp_h\"') LIKE '10.%')\n  AND $__timeFilter(timestamp)\nGROUP BY source_ip, e2.country, dest_ip, dest_port, service, proto\nORDER BY connections DESC LIMIT 30",
+          "format": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "connections", "desc": true }],
+        "cellHeight": "sm",
+        "footer": { "show": false, "reducer": ["sum"], "fields": "" }
+      }
+    }
+  ]
+}
