@@ -12,10 +12,11 @@ from system_prompt import SYSTEM_PROMPT
 from tools import TOOL_DEFINITIONS, TOOL_MAP
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:2b")
 DUCKDB_PATH = os.environ.get("DUCKDB_PATH", "/var/log/ids/duckdb/ids_readonly.duckdb")
 MAX_TOOL_ROUNDS = 5
 NUM_CTX = 4096
+NUM_THREAD = int(os.environ.get("OLLAMA_NUM_THREAD", "4"))
 
 
 def get_ollama_client():
@@ -154,7 +155,7 @@ if prompt := st.chat_input("Ask about your network..."):
                     model=OLLAMA_MODEL,
                     messages=ollama_messages,
                     tools=TOOL_DEFINITIONS,
-                    options={"num_ctx": NUM_CTX},
+                    options={"num_ctx": NUM_CTX, "num_thread": NUM_THREAD},
                 )
                 elapsed = time.monotonic() - t0
                 msg = response.message

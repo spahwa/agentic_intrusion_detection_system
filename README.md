@@ -84,7 +84,7 @@ A fully local, AI-powered Intrusion Detection System. Captures live network traf
 
 ## Architecture Overview
 
-The system is organized into four layers, each built as a separate phase:
+The system is organized into six layers:
 
 | Layer | Components | Purpose |
 |-------|-----------|---------|
@@ -222,7 +222,7 @@ zeek_logs                       parse_zeek                ndjson_zeek
 |---|---|
 | **Image** | `python:3.12-slim` + `duckdb==1.4.4` + `nmap` |
 | **Container** | `ids-duckdb-mgr` |
-| **Network** | Default (bridge) |
+| **Network** | `host` mode (to reach Ollama on localhost for RAG indexing) |
 | **Database** | `/var/log/ids/duckdb/ids.duckdb` |
 
 The DuckDB Manager is the central data service. It runs a 10-second main loop plus a continuously running background thread (IPWatcher) for near-real-time new-device detection.
@@ -309,7 +309,7 @@ DuckDB has a single-writer lock. Multiple containers (Grafana, Streamlit, Alert 
 | **Port** | `GRAFANA_PORT` (default `3000`) — set in `.env` |
 | **Credentials** | `admin` / `admin` |
 
-Grafana provides 8 auto-provisioned dashboards that query DuckDB directly via the `motherduck-duckdb-datasource` plugin (v0.4.0). All dashboards and the datasource are provisioned from files — no manual setup needed on first boot.
+Grafana provides 9 auto-provisioned dashboards that query DuckDB directly via the `motherduck-duckdb-datasource` plugin (v0.4.0). All dashboards and the datasource are provisioned from files — no manual setup needed on first boot.
 
 **Dashboards:**
 
@@ -323,6 +323,7 @@ Grafana provides 8 auto-provisioned dashboards that query DuckDB directly via th
 | **Network Nodes** | Device inventory with manufacturer, connection count, noisiest devices |
 | **Device Detail** | Drill-down per device (dropdown selector): connection history, protocols, services, external IPs contacted |
 | **External Access & GeoIP** | External IPs by country, country breakdown pie chart, inbound connections, top services/ports |
+| **Connection Map** | Node graph of device-to-device connections with manufacturer/country enrichment; top connection pairs table |
 
 ---
 
@@ -634,7 +635,7 @@ results     JSON                     -- Full scan results (hosts, ports, service
 | Suricata | `ids-suricata` | host | C daemon | `jasonish/suricata:7.0.8` | af-packet capture, signature matching, EVE JSON |
 | Zeek | `ids-zeek` | host | C++ daemon | `zeek/zeek:7.0.4` | libpcap capture, protocol analysis, JSON logs |
 | Vector | `ids-vector` | bridge | Rust daemon | `timberio/vector:0.53.0-alpine` | VRL transforms, file tailing, NDJSON staging |
-| DuckDB Manager | `ids-duckdb-mgr` | bridge | Python 3.12 | `python:3.12-slim` + nmap | DuckDB ingestion, enrichment, anomaly detection, scheduled nmap |
+| DuckDB Manager | `ids-duckdb-mgr` | host | Python 3.12 | `python:3.12-slim` + nmap | DuckDB ingestion, enrichment, anomaly detection, scheduled nmap |
 | Grafana | `ids-grafana` | bridge | Go daemon | `grafana/grafana:11.6.0-ubuntu` | DuckDB plugin, 9 provisioned dashboards |
 | Streamlit | `ids-streamlit` | host | Python 3.12 | `python:3.12-slim` + nmap + curl | Ollama tool-calling, 12 LLM tools, on-demand nmap |
 | Alert Agent | `ids-alert-agent` | host | Python 3.12 | `python:3.12-slim` | Ollama tool-calling, anomaly polling, Gmail SMTP |

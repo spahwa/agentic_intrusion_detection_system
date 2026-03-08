@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic IDS — Architecture</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #080b16;
+    --card:    #101726;
+    --border:  #1a2540;
+    --border2: #243352;
+
+    --sky:     #38bdf8;
+    --red:     #ef4444;
+    --orange:  #fb923c;
+    --cyan:    #22d3ee;
+    --emerald: #34d399;
+    --green:   #4ade80;
+    --violet:  #a78bfa;
+    --rose:    #fb7185;
+    --indigo:  #818cf8;
+    --amber:   #fbbf24;
+
+    --text:    #e2e8f0;
+    --muted:   #7a90ae;
+    --dim:     #3d5070;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    padding: 14px 20px 16px;
+    min-height: 100vh;
+    gap: 0;
+  }
+
+  /* ── Header ─────────────────────────────────────── */
+  .header {
+    text-align: center;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+  }
+  .header h1 {
+    font-size: 1.3rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    background: linear-gradient(120deg, var(--sky) 0%, var(--violet) 55%, var(--rose) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    display: inline-block;
+  }
+  .header p {
+    color: var(--muted);
+    font-size: 0.68rem;
+    letter-spacing: 0.05em;
+    margin-top: 2px;
+  }
+
+  .hint {
+    text-align: center;
+    font-size: 0.58rem;
+    color: var(--dim);
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+
+  /* ── Diagram ─────────────────────────────────────── */
+  .diagram {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Layer row ───────────────────────────────────── */
+  .layer {
+    display: flex;
+    align-items: stretch;
+    position: relative;
+    min-height: 0;
+  }
+
+  /* Left label */
+  .layer-label {
+    flex-shrink: 0;
+    width: 78px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 0;
+    border-right: 1px solid var(--border);
+    position: relative;
+  }
+  .layer-num {
+    font-size: 0.58rem;
+    font-weight: 800;
+    color: var(--dim);
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    letter-spacing: 0.1em;
+  }
+  .layer-name {
+    font-size: 0.5rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dim);
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    margin-top: 4px;
+  }
+
+  /* Cards area */
+  .cards-area {
+    flex: 1;
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    padding: 6px 0 6px 12px;
+  }
+
+  /* ── Card ────────────────────────────────────────── */
+  .card {
+    flex: 1;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 8px 11px;
+    cursor: pointer;
+    transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
+    overflow: hidden;
+    user-select: none;
+  }
+  .card:hover {
+    border-color: var(--accent, var(--border2));
+    background: #141e35;
+  }
+  .card.expanded {
+    border-color: var(--accent, var(--sky));
+    box-shadow: 0 0 0 1px var(--accent, var(--sky)),
+                0 4px 20px rgba(0,0,0,0.6),
+                0 0 14px -4px var(--accent-glow, rgba(56,189,248,0.3));
+    background: #0f1b30;
+  }
+
+  /* Collapsed row */
+  .card-collapsed {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+  .card-head { flex: 1; min-width: 0; }
+  .card-name {
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: var(--accent, var(--text));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .card-sub {
+    font-size: 0.6rem;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 1px;
+  }
+  .chevron {
+    flex-shrink: 0;
+    width: 13px; height: 13px;
+    color: var(--dim);
+    transition: transform 0.2s;
+  }
+  .card.expanded .chevron { transform: rotate(180deg); color: var(--accent, var(--muted)); }
+
+  /* Expanded detail */
+  .card-detail {
+    display: none;
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--border2);
+  }
+  .card.expanded .card-detail { display: block; }
+  .card-role {
+    font-size: 0.68rem;
+    color: var(--muted);
+    line-height: 1.55;
+    margin-bottom: 9px;
+  }
+  .card-role code {
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.65rem;
+    color: var(--accent, var(--cyan));
+    background: rgba(255,255,255,0.05);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag {
+    font-size: 0.57rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid currentColor;
+    opacity: 0.8;
+  }
+
+  /* Accent per component */
+  .net   { --accent: var(--sky);     --accent-glow: rgba(56,189,248,0.25); }
+  .sur   { --accent: var(--red);     --accent-glow: rgba(239,68,68,0.25); }
+  .zek   { --accent: var(--orange);  --accent-glow: rgba(251,146,60,0.25); }
+  .vec   { --accent: var(--cyan);    --accent-glow: rgba(34,211,238,0.25); }
+  .ddb   { --accent: var(--emerald); --accent-glow: rgba(52,211,153,0.25); }
+  .gra   { --accent: var(--green);   --accent-glow: rgba(74,222,128,0.25); }
+  .str   { --accent: var(--violet);  --accent-glow: rgba(167,139,250,0.25); }
+  .aga   { --accent: var(--rose);    --accent-glow: rgba(251,113,133,0.25); }
+  .oll   { --accent: var(--indigo);  --accent-glow: rgba(129,140,248,0.25); }
+  .eml   { --accent: var(--amber);   --accent-glow: rgba(251,191,36,0.25); }
+
+  /* ── Connector between layers ────────────────────── */
+  .connector {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    height: 22px;
+    padding-left: 78px;
+  }
+  .connector-inner {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding-left: 12px;
+  }
+  .connector-label {
+    font-size: 0.57rem;
+    color: var(--dim);
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+  }
+
+  /* ── Footer ──────────────────────────────────────── */
+  .footer {
+    text-align: center;
+    margin-top: 10px;
+    font-size: 0.57rem;
+    color: var(--dim);
+    letter-spacing: 0.06em;
+    flex-shrink: 0;
+  }
+
+  /* Responsive */
+  @media (max-width: 640px) {
+    .cards-area { flex-direction: column; }
+    .layer-label { width: 40px; }
+    .connector { padding-left: 40px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Agentic IDS</h1>
+  <p>Local AI-Powered Intrusion Detection System &nbsp;·&nbsp; Architecture Overview</p>
+</div>
+
+<div class="hint">Click any component to expand &nbsp;·&nbsp; click again to collapse</div>
+
+<div class="diagram">
+
+  <!-- ── 01 Network ───────────────────────────────── -->
+  <div class="layer">
+    <div class="layer-label">
+      <span class="layer-num">01</span>
+      <span class="layer-name">Network</span>
+    </div>
+    <div class="cards-area">
+      <div class="card net" onclick="toggle(this)">
+        <div class="card-collapsed">
+          <span class="card-icon">🌐</span>
+          <div class="card-head">
+            <div class="card-name">Physical NIC</div>
+            <div class="card-sub">enp1s0f0 · wlp2s0 · promiscuous mode</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="card-detail">
+          <div class="card-role">Raw packet stream from the physical network. Both wired (<code>enp1s0f0</code>) and wireless (<code>wlp2s0</code>) interfaces supported. Configured via <code>NETWORK_INTERFACE</code> in <code>.env</code>. Wireless does not support true promiscuous mode in managed mode — use wired for full visibility.</div>
+          <div class="tags">
+            <span class="tag" style="color:var(--sky)">enp1s0f0</span>
+            <span class="tag" style="color:var(--sky)">wlp2s0</span>
+            <span class="tag" style="color:var(--sky)">promiscuous mode</span>
+            <span class="tag" style="color:var(--sky)">af-packet</span>
+            <span class="tag" style="color:var(--sky)">x86_64 + ARM64</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector">
+    <div class="connector-inner">
+      <svg width="1" height="22" viewBox="0 0 1 22" style="overflow:visible;flex-shrink:0">
+        <defs><marker id="a1" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3d5070"/></marker></defs>
+        <line x1=".5" y1="0" x2=".5" y2="18" stroke="#3d5070" stroke-width="1.5" marker-end="url(#a1)"/>
+      </svg>
+      <span class="connector-label">raw packets</span>
+    </div>
+  </div>
+
+  <!-- ── 02 Capture ─────────────────────────────── -->
+  <div class="layer">
+    <div class="layer-label">
+      <span class="layer-num">02</span>
+      <span class="layer-name">Capture</span>
+    </div>
+    <div class="cards-area">
+      <div class="card sur" onclick="toggle(this)">
+        <div class="card-collapsed">
+          <span class="card-icon">🔴</span>
+          <div class="card-head">
+            <div class="card-name">Suricata 7.0.8</div>
+            <div class="card-sub">Signature IDS · EVE JSON · auto rule updates</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="card-detail">
+          <div class="card-role">Signature-based IDS. Inspects packets via <code>af-packet</code> and generates EVE JSON alerts and rich metadata. Background watchdog runs <code>suricata-update</code> every 24 h with zero-downtime USR2 rule reload. EVE rotated on size via HUP signal.</div>
+          <div class="tags">
+            <span class="tag" style="color:var(--red)">eve.json</span>
+            <span class="tag" style="color:var(--red)">community-id</span>
+            <span class="tag" style="color:var(--red)">suricata-update</span>
+            <span class="tag" style="color:var(--red)">network_mode: host</span>
+            <span class="tag" style="color:var(--red)">USR2 reload</span>
+            <span class="tag" style="color:var(--red)">NET_ADMIN + NET_RAW</span>
+          </div>
+        </div>
+      </div>
+      <div class="card zek" onclick="toggle(this)">
+        <div class="card-collapsed">
+          <span class="card-icon">🟠</span>
+          <div class="card-head">
+            <div class="card-name">Zeek 7.0.4</div>
+            <div class="card-sub">Protocol analyzer · conn/dns/ssl/http · hourly rotation</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="card-detail">
+          <div class="card-role">Deep packet inspection producing structured JSON logs per protocol: <code>conn</code>, <code>dns</code>, <code>ssl</code>, <code>http</code>, <code>dhcp</code>, <code>files</code>… Logs rotate hourly. MAC addresses via <code>mac-logging</code> policy. Cross-tool correlation with Suricata via shared <code>community_id</code> flow hash.</div>
+          <div class="tags">
+            <span class="tag" style="color:var(--orange)">conn.log</span>
+            <span class="tag" style="color:var(--orange)">dns.log</span>
+            <span class="tag" style="color:var(--orange)">ssl.log</span>
+            <span class="tag" style="color:var(--orange)">community-id</span>
+            <span class="tag" style="color:var(--orange)">hourly rotation</span>
+            <span class="tag" style="color:var(--orange)">MAC logging</span>
+            <span class="tag" style="color:var(--orange)">network_mode: host</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector">
+    <div class="connector-inner">
+      <svg width="1" height="22" viewBox="0 0 1 22" style="overflow:visible;flex-shrink:0">
+        <defs><marker id="a2" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3d5070"/></marker></defs>
+        <line x1=".5" y1="0" x2=".5" y2="18" stroke="#3d5070" stroke-width="1.5" marker-end="url(#a2)"/>
+      </svg>
+      <span class="connector-label">JSON logs → /var/log/ids/</span>
+    </div>
+  </div>
+
+  <!-- ── 03 Pipeline ────────────────────────────── -->
+  <div class="layer">
+    <div class="layer-label">
+      <span class="layer-num">03</span>
+      <span class="layer-name">Pipeline</span>
+    </div>
+    <div class="cards-area">
+      <div class="card vec" onclick="toggle(this)">
+        <div class="card-collapsed">
+          <span class="card-icon">🔷</span>
+          <div class="card-head">
+            <div class="card-name">Vector.dev 0.53</div>
+            <div class="card-sub">VRL transforms · hourly NDJSON partitions · stateless</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="card-detail">
+          <div class="card-role">Reads Suricata EVE + Zeek JSON, normalises via VRL transforms, stages as hourly-partitioned NDJSON files. Stateless by design — all schema control and TTL management stays in the Python manager. Past-hour files are immutable, current-hour grows.</div>
+          <div class="tags">
+            <span class="tag" style="color:var(--cyan)">VRL transforms</span>
+            <span class="tag" style="color:var(--cyan)">hourly partitions</span>
+            <span class="tag" style="color:var(--cyan)">NDJSON staging</span>
+            <span class="tag" style="color:var(--cyan)">stateless</span>
+            <span class="tag" style="color:var(--cyan)">alpine image</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector">
+    <div class="connector-inner">
+      <svg width="1" height="22" viewBox="0 0 1 22" style="overflow:visible;flex-shrink:0">
+        <defs><marker id="a3" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3d5070"/></marker></defs>
+        <line x1=".5" y1="0" x2=".5" y2="18" stroke="#3d5070" stroke-width="1.5" marker-end="url(#a3)"/>
+      </svg>
+      <span class="connector-label">bulk-load NDJSON · read_json_auto()</span>
+    </div>
+  </div>
+
+  <!-- ── 04 Storage ─────────────────────────────── -->
+  <div class="layer">
+    <div class="layer-label">
+      <span class="layer-num">04</span>
+      <span class="layer-name">Storage</span>
+    </div>
+    <div class="cards-area">
+      <div class="card ddb" onclick="toggle(this)">
+        <div class="card-collapsed">
+          <span class="card-icon">🗄️</span>
+          <div class="card-head">
+            <div class="card-name">DuckDB Manager</div>
+            <div class="card-sub">24 hr TTL · OUI/GeoIP enrichment · 7 anomaly detectors · nmap</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="card-detail">
+          <div class="card-role">Central data engine. Ingests NDJSON → <code>ids.duckdb</code>. 24 hr TTL purge + VACUUM. IEEE OUI manufacturer lookup (~32 K entries) + DB-IP GeoIP country lookup (~250 K IPv4 ranges). Materializes <code>devices</code> and <code>external_ips</code> every 5 min. Detects 7 anomaly types with EMA behavioral baselines. Scheduled weekly nmap scan. Copies read-only snapshots for each consumer. Threat Intel RAG indexing via <code>rag.duckdb</code>.</div>
+          <div class="tags">
+            <span class="tag" style="color:var(--emerald)">events</span>
+            <span class="tag" style="color:var(--emerald)">devices</span>
+            <span class="tag" style="color:var(--emerald)">external_ips</span>
+            <span class="tag" style="color:var(--emerald)">anomaly_events</span>
+            <span class="tag" style="color:var(--emerald)">nmap_scans</span>
+            <span class="tag" style="color:var(--emerald)">OUI lookup</span>
+            <span class="tag" style="color:var(--emerald)">GeoIP lookup</span>
+            <span class="tag" style="color:var(--emerald)">24 hr TTL</span>
+            <span class="tag" style="color:var(--emerald)">EMA baselines</span>
+            <span class="tag" style="color:var(--emerald)">rag.duckdb</span>
+            <span class="tag" style="color:var(--emerald)">7 anomaly detectors</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector">
+    <div class="connector-inner">
+      <svg width="1" height="22" viewBox="0 0 1 22" style="overflow:visible;flex-shrink:0">
+        <defs><marker id="a4" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3d5070"/></marker></defs>
+        <line x1=".5" y1="0" x2=".5" y2="18" stroke="#3d5070" stroke-width="1.5" marker-end="url(#a4)"/>
+      </svg>
+      <span class="connector-label">read-only DuckDB snapshots → each consumer</span>
+    </div>
+  </div>
+
+  <!-- ── 05 Consumers ───────────────────────────── -->
+  <div class="layer">
+    <div class="layer-label">
+      <span class="layer-num">05</span>
+      <span class="layer-name">Consumers</span>
+    </div>
+    <div class="cards-area">
+      <div class="card gra" onclick="toggle(this)">
+        <div class="card-collapsed">
+          <span class="card-icon">📊</span>
+          <div class="card-head">
+            <div class="card-name">Grafana 11.6</div>
+            <div class="card-sub">9 dashboards · :3000</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="card-detail">
+          <div class="card-role">9 dashboards provisioned on startup via <code>provider.yml</code>. Reads <code>ids_readonly.duckdb</code> via DuckDB plugin (v0.4.0). No manual setup needed — datasource + dashboards are auto-configured.</div>
+          <div class="tags">
+            <span class="tag" style="color:var(--green)">:3000</span>
+            <span class="tag" style="color:var(--green)">Overview</span>
+            <span class="tag" style="color:var(--green)">Alerts</span>
+            <span class="tag" style="color:var(--green)">DNS</span>
+            <span class="tag" style="color:var(--green)">GeoIP</span>
+            <span class="tag" style="color:var(--green)">Devices</span>
+            <span class="tag" style="color:var(--green)">Threats</span>
+            <span class="tag" style="color:var(--green)">Connection Map</span>
+            <span class="tag" style="color:var(--green)">DuckDB plugin</span>
+          </div>
+        </div>
+      </div>
+      <div class="card str" onclick="toggle(this)">
+        <div class="card-collapsed">
+          <span class="card-icon">💬</span>
+          <div class="card-head">
+            <div class="card-name">Streamlit Chat</div>
+            <div class="card-sub">NL queries · 12 tools · nmap · :8501</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="card-detail">
+          <div class="card-role">"Chat with your Network" — natural language queries via Ollama tool-calling loop. 12 tools: <code>query_events</code>, <code>get_devices</code>, <code>get_alerts</code>, <code>get_external_connections</code>, <code>get_dns_top_domains</code>, <code>get_traffic_by_protocol</code>, <code>check_whitelist</code>, <code>nmap_scan</code>, <code>send_notification</code>, <code>send_email</code>, <code>get_scan_history</code>, <code>rag_search</code>. RFC1918-only nmap enforcement. SELECT-only DuckDB safety.</div>
+          <div class="tags">
+            <span class="tag" style="color:var(--violet)">:8501</span>
+            <span class="tag" style="color:var(--violet)">tool calling</span>
+            <span class="tag" style="color:var(--violet)">nmap RFC1918</span>
+            <span class="tag" style="color:var(--violet)">whitelist CRUD</span>
+            <span class="tag" style="color:var(--violet)">RAG search</span>
+            <span class="tag" style="color:var(--violet)">12 tools</span>
+            <span class="tag" style="color:var(--violet)">SELECT-only</span>
+          </div>
+        </div>
+      </div>
+      <div class="card aga" onclick="toggle(this)">
+        <div class="card-collapsed">
+          <span class="card-icon">🚨</span>
+          <div class="card-head">
+            <div class="card-name">Alert Agent</div>
+            <div class="card-sub">Anomaly poll · LLM email · 60 s</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="card-detail">
+          <div class="card-role">Polls <code>anomaly_events</code> every 60 s. Feeds each anomaly to Ollama, which optionally queries additional context, then drafts and sends a rich email alert. State tracked in <code>alert_state.db</code> via composite key <code>(anomaly_id, detected_at)</code> — survives DuckDB sequence resets. RAG context pre-injected for Suricata alerts.</div>
+          <div class="tags">
+            <span class="tag" style="color:var(--rose)">60 s poll</span>
+            <span class="tag" style="color:var(--rose)">Gmail SMTP</span>
+            <span class="tag" style="color:var(--rose)">LLM-drafted</span>
+            <span class="tag" style="color:var(--rose)">alert_state.db</span>
+            <span class="tag" style="color:var(--rose)">RAG pre-inject</span>
+            <span class="tag" style="color:var(--rose)">7 anomaly types</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector">
+    <div class="connector-inner">
+      <svg width="1" height="22" viewBox="0 0 1 22" style="overflow:visible;flex-shrink:0">
+        <defs><marker id="a5" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3d5070"/></marker></defs>
+        <line x1=".5" y1="0" x2=".5" y2="18" stroke="#3d5070" stroke-width="1.5" marker-end="url(#a5)"/>
+      </svg>
+      <span class="connector-label">Ollama API · tool calls · results</span>
+    </div>
+  </div>
+
+  <!-- ── 06 AI ────────────────────────────────────── -->
+  <div class="layer">
+    <div class="layer-label">
+      <span class="layer-num">06</span>
+      <span class="layer-name">AI</span>
+    </div>
+    <div class="cards-area">
+      <div class="card oll" onclick="toggle(this)">
+        <div class="card-collapsed">
+          <span class="card-icon">🧠</span>
+          <div class="card-head">
+            <div class="card-name">Ollama + Qwen2.5</div>
+            <div class="card-sub">qwen2.5:3b · nomic-embed-text · :11434 · host process</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="card-detail">
+          <div class="card-role">Host-native LLM inference (no container). <code>qwen2.5:3b</code> for chat — ~20 s/query, 2 GB RAM, fits RPI5. <code>nomic-embed-text</code> for Threat Intel RAG embeddings. OpenAI-compatible tool/function calling. Streamlit and Alert Agent share this single endpoint at <code>localhost:11434</code>.</div>
+          <div class="tags">
+            <span class="tag" style="color:var(--indigo)">:11434</span>
+            <span class="tag" style="color:var(--indigo)">qwen2.5:3b</span>
+            <span class="tag" style="color:var(--indigo)">nomic-embed-text</span>
+            <span class="tag" style="color:var(--indigo)">tool calling</span>
+            <span class="tag" style="color:var(--indigo)">host process</span>
+            <span class="tag" style="color:var(--indigo)">OpenAI-compatible</span>
+          </div>
+        </div>
+      </div>
+      <div class="card eml" onclick="toggle(this)">
+        <div class="card-collapsed">
+          <span class="card-icon">📧</span>
+          <div class="card-head">
+            <div class="card-name">Gmail SMTP</div>
+            <div class="card-sub">smtp.gmail.com:465 · App Password · smtplib</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="card-detail">
+          <div class="card-role">LLM-drafted alert emails delivered via Gmail App Password. Uses Python <code>smtplib</code> — zero external service dependencies. Configured via <code>GMAIL_USER</code>, <code>GMAIL_APP_PASSWORD</code>, and <code>ALERT_RECIPIENT</code> in <code>.env</code>.</div>
+          <div class="tags">
+            <span class="tag" style="color:var(--amber)">smtp:465</span>
+            <span class="tag" style="color:var(--amber)">TLS</span>
+            <span class="tag" style="color:var(--amber)">App Password</span>
+            <span class="tag" style="color:var(--amber)">smtplib</span>
+            <span class="tag" style="color:var(--amber)">zero deps</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /diagram -->
+
+<div class="footer">
+  Phases 1–3d complete &nbsp;·&nbsp; Phase 4 (Authelia + Cloudflare Tunnel) in progress
+</div>
+
+<script>
+  function toggle(card) {
+    const wasExpanded = card.classList.contains('expanded');
+    // Collapse siblings in same layer
+    card.closest('.cards-area').querySelectorAll('.card').forEach(c => c.classList.remove('expanded'));
+    if (!wasExpanded) card.classList.add('expanded');
+  }
+</script>
+</body>
+</html>

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Agentic IDS** — A local, AI-powered Intrusion Detection System with:
 - 24-hour rolling memory window for log retention
-- Agentic LLM querying via Qwen2.5 (natural language "Chat with your Network")
+- Agentic LLM querying via Qwen3.5 (natural language "Chat with your Network")
 - Secure 2FA remote access via Cloudflare Tunnels + Authelia
 
 ## Target Platforms
@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Environment
 
 - Docker 29.2.0, Docker Compose v5.0.2
-- Ollama 0.14.1 (installed on host)
+- Ollama 0.17.7 (installed on host)
 - Network interfaces: `enp1s0f0` (wired), `wlp2s0` (wireless) — configurable via `.env`
 - Hostname: `ethereal`
 
@@ -30,7 +30,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | IDS/Metadata | Suricata, Zeek, Nmap (active scanning) |
 | Data Pipeline | Vector.dev (TTL management) |
 | Storage | DuckDB (logs), SQLite (settings/whitelists) |
-| AI Engine | Ollama (Qwen2.5-3B/7B), MCP (Model Context Protocol) |
+| AI Engine | Ollama (Qwen3.5-2B), MCP (Model Context Protocol) |
 | Frontend | Streamlit (chat UI), Grafana (dashboards) |
 | Security | Cloudflare Tunnels, Authelia (2FA/TOTP) |
 
@@ -120,7 +120,7 @@ Fallback images: `oisf/suricata` (Suricata), `blacktop/zeek` (Zeek, good ARM64 s
 - **Vector → NDJSON → DuckDB**: No native DuckDB sink in Vector; Vector normalizes and stages NDJSON files, Python `duckdb-mgr` bulk-loads via `read_json_auto()`. This keeps Vector stateless and gives Python full control over schema/TTL.
 - **Single events table**: All log types stored in one `events` table with `raw JSON` column. Simple, flexible, and lets Phase 3 MCP query any field dynamically.
 - **Enrichment tables**: `oui_lookup` (IEEE OUI→manufacturer), `geoip_lookup` (DB-IP IPv4→country), `devices` (materialized internal IP summary), `external_ips` (materialized external IP summary with country). Rebuilt every 5 minutes from events data. No new pip dependencies — uses Python stdlib (`csv`, `gzip`, `urllib.request`, `struct`, `socket`).
-- **Direct tool calling**: Ollama 0.14+ supports OpenAI-compatible tool/function calling. Qwen2.5-7B tools are defined as Python functions in Streamlit app — no separate MCP server process needed. If MCP is needed later (multi-client), tool functions can be wrapped in FastMCP trivially.
+- **Direct tool calling**: Ollama 0.14+ supports OpenAI-compatible tool/function calling. Qwen3.5-2B tools are defined as Python functions in Streamlit app — no separate MCP server process needed. If MCP is needed later (multi-client), tool functions can be wrapped in FastMCP trivially.
 - **Streamlit reads readonly snapshot**: Uses `ids_readonly.duckdb` (same as Grafana) to avoid DuckDB single-writer conflicts. SQLite `whitelist.db` for IP whitelist CRUD.
 - **Agentic alerts**: `duckdb-mgr` detects anomalies (new device, traffic spike, high-severity Suricata alert) and writes to `anomaly_events` table. `alert-agent` polls anomalies, feeds each to the LLM which queries for additional context and drafts a rich email alert via Gmail SMTP. Alert state tracked in SQLite (`alert_state.db`) to avoid DuckDB write contention.
 - **Nmap integration**: Active scanning installed in Streamlit (on-demand via chat) and duckdb-mgr (scheduled weekly). On-demand results go to SQLite (`nmap_results.db`) since Streamlit reads DuckDB read-only; duckdb-mgr syncs SQLite → DuckDB `nmap_scans` table each cycle. RFC1918-only enforcement prevents scanning external targets.
@@ -144,7 +144,7 @@ MAX_DB_SIZE_MB=4000            # DuckDB max file size before pausing ingestion
 MAX_EVE_SIZE_MB=200            # Suricata eve.json rotation threshold in MB
 GRAFANA_TAG=11.6.0-ubuntu      # Grafana Docker image tag (Ubuntu for DuckDB plugin)
 GRAFANA_PORT=3000              # Grafana web UI port
-OLLAMA_MODEL=qwen2.5:3b        # Ollama model for chat (3B default, 7B optional)
+OLLAMA_MODEL=qwen3.5:2b        # Ollama model for chat (3.5-2B: better than 2.5-3B, 262K ctx)
 STREAMLIT_PORT=8501            # Streamlit chat UI port
 APPRISE_URLS=                  # Apprise notification URLs (comma-separated)
 GMAIL_USER=your-email@gmail.com  # Gmail for alert-agent email notifications
@@ -252,7 +252,7 @@ sudo chmod 777 /var/log/ids
 
 **Goal**: Natural language "Chat with your Network" via Ollama + Streamlit.
 
-- Ollama (host-installed) running Qwen2.5-7B with native tool/function calling
+- Ollama (host-installed) running Qwen3.5-2B with native tool/function calling
 - Streamlit chat UI with 12 tools: `query_events` (arbitrary SQL), `get_devices`, `get_alerts`, `get_external_connections`, `get_dns_top_domains`, `get_traffic_by_protocol`, `get_event_stats`, `check_whitelist` (SQLite CRUD), `send_notification` (Apprise), `send_email`, `nmap_scan` (active port scanning), `get_scan_history`
 - Schema-aware system prompt teaches LLM full DuckDB schema + JSON field paths + example queries
 - Tool-calling loop: Ollama → tool calls → execute → feed results back → repeat until text response
@@ -310,7 +310,7 @@ sudo chmod 777 /var/log/ids
 | Grafana | `ids-grafana` | bridge | Go (daemon) | `grafana/grafana:11.6.0-ubuntu` | Dashboard UI — 9 provisioned IDS dashboards querying DuckDB read-only snapshot |
 | Streamlit | `ids-streamlit` | host | Python 3.12 | `python:3.12-slim` + nmap + curl | Chat UI — natural language queries via Ollama tool-calling, on-demand nmap scanning |
 | Alert Agent | `ids-alert-agent` | host | Python 3.12 | `python:3.12-slim` | Alert processor — polls anomalies, LLM analysis, drafts and sends email alerts via Gmail |
-| Ollama | _(host process)_ | host | Go (daemon) | _(native install)_ | LLM inference server — serves Qwen2.5-3B/7B with native tool/function calling |
+| Ollama | _(host process)_ | host | Go (daemon) | _(native install)_ | LLM inference server — serves Qwen3.5-2B with native tool/function calling |
 
 ### Component Interfaces
 

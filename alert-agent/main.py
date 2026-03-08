@@ -21,7 +21,7 @@ logging.basicConfig(
 log = logging.getLogger("alert-agent")
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:2b")
 DUCKDB_PATH = os.environ.get("DUCKDB_PATH", "/var/log/ids/duckdb/ids_readonly.duckdb")
 ALERT_STATE_PATH = os.environ.get("ALERT_STATE_PATH", "/var/log/ids/duckdb/alert_state.db")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "10"))
@@ -29,6 +29,7 @@ FAST_ALERTS_PATH = os.environ.get("FAST_ALERTS_PATH", "/var/log/ids/duckdb/fast_
 FAST_POLL_INTERVAL = 2
 MAX_TOOL_ROUNDS = 5
 NUM_CTX = 4096
+NUM_THREAD = int(os.environ.get("OLLAMA_NUM_THREAD", "4"))
 
 
 def init_state_db() -> sqlite3.Connection:
@@ -156,7 +157,7 @@ def process_anomaly(client: ollama.Client, anomaly: dict) -> bool:
                 model=OLLAMA_MODEL,
                 messages=messages,
                 tools=TOOL_DEFINITIONS,
-                options={"num_ctx": NUM_CTX},
+                options={"num_ctx": NUM_CTX, "num_thread": NUM_THREAD},
             )
         except Exception:
             log.exception("Ollama chat failed for anomaly %d", anomaly["id"])
