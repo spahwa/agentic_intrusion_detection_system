@@ -269,8 +269,12 @@ The DuckDB Manager is the central data service. It runs a 10-second main loop pl
 │     Sync on-demand scan results from SQLite → DuckDB    │
 │     Run scheduled subnet scan (weekly by default)       │
 │                                                         │
-│  6. VACUUM (every 10 cycles / ~100s)                    │
-│     Reclaim disk space from deleted rows                │
+│  6. VACUUM + AUTO-COMPACT (every 10 cycles / ~100s)     │
+│     VACUUM: reclaim space from deleted rows             │
+│     AUTO-COMPACT: if DB > 80% of MAX_DB_SIZE_MB AND    │
+│       file is >3x estimated live data size →            │
+│       export to parquet, recreate DB, reimport          │
+│       (DuckDB VACUUM alone cannot shrink the file)      │
 │                                                         │
 │  7. CLEANUP                                             │
 │     Remove old NDJSON staging files                     │
@@ -425,15 +429,28 @@ The Alert Agent has two independent alerting paths running simultaneously:
 |---|---|
 | **Installed on** | Host machine (not in Docker) |
 | **Port** | `11434` (localhost only) |
-| **Model** | `qwen2.5:3b` (default) or `qwen2.5:7b` |
+| **Model** | `qwen3.5:2b` (default) |
+| **GPU** | Radeon 780M via Vulkan (`OLLAMA_VULKAN=1`) — ~18 tok/s decode |
 
-Ollama is the local LLM runtime. It serves the Qwen2.5 model that powers both the Streamlit chat and the Alert Agent.
+Ollama is the local LLM runtime. It serves the Qwen3.5 model that powers both the Streamlit chat and the Alert Agent.
 
 **Why host-installed?** Ollama needs direct GPU/CPU access for inference. Running it inside Docker adds complexity (GPU passthrough) with no benefit. Both Streamlit and Alert Agent containers use `network_mode: host` to reach it on `localhost:11434`.
 
 **Model choice:**
-- `qwen2.5:3b` — Default. Fast (~20s/query), 2GB RAM, good tool-calling support. Fits on Raspberry Pi 5.
-- `qwen2.5:7b` — More accurate SQL generation, but slower (~40s/query), 4GB RAM.
+- `qwen3.5:2b` — Default. ~18 tok/s on Radeon 780M GPU (~12s for 200-token response), 2.7GB RAM, 262K context, better than qwen2.5:3b. Fits on Raspberry Pi 5 (CPU-only there).
+- `qwen2.5:3b` — Fallback. ~10 tok/s CPU-only, 2GB RAM.
+
+**GPU acceleration (Radeon 780M):**
+Ollama uses the integrated Radeon 780M via Vulkan (enabled with `OLLAMA_VULKAN=1` in the systemd service override). No ROCm installation needed — Mesa RADV provides the Vulkan driver. Confirmed working on Ubuntu 24.04 with `ollama ps` showing `100% GPU`.
+
+Systemd override at `/etc/systemd/system/ollama.service.d/override.conf`:
+```ini
+[Service]
+CPUQuota=600%
+Environment="OLLAMA_VULKAN=1"
+```
+
+To verify GPU is active: `ollama ps` — look for `100% GPU` in the PROCESSOR column.
 
 Ollama's native tool/function calling is used (no separate MCP server). The LLM receives tool schemas and decides when to call them.
 
@@ -852,8 +869,21 @@ sudo usermod -aG docker $USER
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen2.5:3b
+ollama pull qwen3.5:2b
+ollama pull nomic-embed-text   # for RAG threat intel (optional)
 ```
+
+**Enable GPU acceleration (Radeon 780M on Ubuntu 24.04):**
+```bash
+sudo mkdir -p /etc/systemd/system/ollama.service.d
+sudo tee /etc/systemd/system/ollama.service.d/override.conf << 'EOF'
+[Service]
+CPUQuota=600%
+Environment="OLLAMA_VULKAN=1"
+EOF
+sudo systemctl daemon-reload && sudo systemctl restart ollama
+```
+Verify with `ollama ps` after running a query — should show `100% GPU`.
 
 ### 3. Identify your network interface
 
@@ -1282,7 +1312,9 @@ bash scripts/verify_phase2.sh
 | New device not showing in Grafana | Device summaries rebuild every ~50s (5 cycles × 10s); Grafana reads a snapshot that updates after each data change | Wait up to ~60s after first traffic from the device |
 | DuckDB lock error | PID namespace isolation between containers | Each consumer uses its own snapshot — restart the affected container |
 | Grafana dashboards empty | DuckDB snapshot may be stale or bloated | Restart duckdb-mgr, then Grafana: `docker compose restart duckdb-mgr grafana` |
-| Streamlit shows "Done" with no answer | LLM returned empty response (qwen2.5:3b quirk) | Auto-nudge logic retries. If persistent, try `OLLAMA_MODEL=qwen2.5:7b` in `.env` |
+| Streamlit shows "Done" with no answer | LLM hit max tool call rounds (5 default) without producing text | Fixed: `MAX_TOOL_ROUNDS=10` in `app.py`. Also check for `pytz` in container: `docker exec ids-streamlit python3 -c "import pytz"` |
+| Chat `get_devices` returns pytz error | `pytz` missing from Streamlit container | Rebuild: `docker compose build streamlit && docker compose up -d streamlit` |
+| Ollama shows `100% CPU` not GPU | Vulkan not enabled or model not yet loaded | Check `/etc/systemd/system/ollama.service.d/override.conf` has `OLLAMA_VULKAN=1`; run a query first then `ollama ps` |
 | Alert email not sent | Check `docker compose logs alert-agent --tail=30` | Verify Gmail App Password in `secrets/`, ensure 2FA is enabled |
 | No Zeek traffic logs | Only `packet_filter.log` and `reporter.log` exist | No network traffic detected. Generate some (see above) |
 | Permission denied on `/var/log/ids` | Directory permissions | `sudo chmod 777 /var/log/ids` |

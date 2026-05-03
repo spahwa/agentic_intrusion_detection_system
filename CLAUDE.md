@@ -22,6 +22,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Ollama 0.17.7 (installed on host)
 - Network interfaces: `enp1s0f0` (wired), `wlp2s0` (wireless) — configurable via `.env`
 - Hostname: `ethereal`
+- GPU: AMD Radeon 780M iGPU (RDNA3/gfx1103) — Vulkan inference via Mesa RADV, ~18 tok/s decode
+- Ollama systemd override: `CPUQuota=600%` + `Environment="OLLAMA_VULKAN=1"` in `/etc/systemd/system/ollama.service.d/override.conf`
 
 ## Tech Stack
 
@@ -450,3 +452,111 @@ Physical NIC (enp1s0f0)
 - Suricata EVE JSON does not auto-rotate; Phase 2 handles retention. Zeek rotates hourly by default.
 - Host directory `/var/log/ids` must exist before `docker compose up` (bind-mount won't auto-create it)
 - On RPI5 migration: verify ARM64 manifests with `docker manifest inspect`, rebuild with `--no-cache`, adjust `NETWORK_INTERFACE` to match RPI5 interface name (likely `eth0` or `end0`), and consider reducing Zeek file extraction to save resources
+
+## Ollama Performance Notes
+
+### CPU Allocation
+
+Ollama runs as a host systemd service. CPU allocation is controlled via a systemd drop-in:
+
+```ini
+# /etc/systemd/system/ollama.service.d/override.conf
+[Service]
+CPUQuota=600%
+Environment="OLLAMA_VULKAN=1"
+```
+
+`CPUQuota=600%` = 6 full cores out of 16 threads (leaves headroom for other apps). After changing:
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart ollama
+```
+
+**`OLLAMA_NUM_THREADS` is ignored** — Ollama uses its own thread-count heuristic derived from CPUQuota. Setting `CPUQuota=600%` results in 8 threads automatically (not 6). Do not set `OLLAMA_NUM_THREADS`.
+
+### GPU Acceleration (AMD Radeon 780M)
+
+The Radeon 780M (gfx1103 / RDNA3) is not in AMD's official ROCm support matrix, but Vulkan inference works via Mesa RADV on Ubuntu 24.04:
+
+```bash
+# Install Mesa Vulkan driver (usually already present)
+sudo apt install mesa-vulkan-drivers
+
+# Verify Vulkan device is visible
+vulkaninfo --summary 2>/dev/null | grep -A2 "GPU id"
+
+# After setting OLLAMA_VULKAN=1 and restarting, verify GPU is active:
+ollama ps
+# Should show: 100% GPU (not 100% CPU)
+```
+
+**Performance reference (qwen3.5:2b on this machine)**:
+| Config | Tokens/s |
+|--------|----------|
+| CPUQuota=400%, CPU-only | ~1.1 tok/s |
+| CPUQuota=600%, CPU-only | ~10.3 tok/s |
+| CPUQuota=600% + OLLAMA_VULKAN=1 | ~18.0 tok/s |
+
+If `ollama ps` shows `100% CPU` after enabling Vulkan, the model doesn't fully fit in VRAM — this is expected for the iGPU (shared RAM); Ollama still offloads as many layers as possible.
+
+## DuckDB Compaction Notes
+
+### VACUUM Does Not Shrink Files
+
+`VACUUM` in DuckDB 1.4.x reclaims internal free-list pages but does **not** shrink the file on disk. After heavy TTL-based DELETEs the file can grow to GBs while holding only MBs of live data.
+
+### Auto-Compaction in duckdb-mgr
+
+`compact_db()` in `duckdb-mgr/main.py` triggers automatically when:
+- DB file exceeds **80% of `MAX_DB_SIZE_MB`** (default 3200 MB), AND
+- File size is **>3× the estimated live data size** (bloat ratio)
+
+It uses a safe Parquet export → delete → recreate → reimport pattern. After compaction, `_sync_anomaly_seq()` is called to advance the anomaly sequence past any previously processed IDs.
+
+**Manual trigger** (if needed):
+```python
+docker exec ids-duckdb-mgr python3 -c "
+import duckdb, main
+db = duckdb.connect('/var/log/ids/duckdb/ids.duckdb')
+main.compact_db(db)
+"
+```
+
+## Streamlit Chat Notes
+
+- `pytz` **must** be in `streamlit/requirements.txt` — DuckDB TIMESTAMPTZ columns require it at read time. Missing `pytz` causes `get_devices` to crash silently, consuming tool rounds with no answer.
+- `MAX_TOOL_ROUNDS = 10` in `streamlit/app.py` — raised from 5. A value of 5 was too low when fallback SQL retries occurred, leaving no round for the final text answer.
+
+## Grafana Operational Notes
+
+### DuckDB Version Must Be Pinned to Match the Plugin
+
+The `motherduck-duckdb-datasource` plugin (v0.4.0) embeds DuckDB **1.4.1** as a Go C library. All Python services (`duckdb-mgr`, `streamlit`, `alert-agent`) **must** pin `duckdb==1.4.1` in their `requirements.txt`. A version mismatch causes the plugin to silently return 0 rows for all data queries (schema/`SHOW TABLES` still works, but no row data is returned). The `test_sanity.sh` S31 test enforces this.
+
+If the DB was written with a mismatched version, delete all `.duckdb` files and restart `ids-duckdb-mgr` to recreate them:
+```bash
+docker exec ids-duckdb-mgr rm -f /var/log/ids/duckdb/ids.duckdb /var/log/ids/duckdb/ids_readonly.duckdb \
+  /var/log/ids/duckdb/ids_streamlit.duckdb /var/log/ids/duckdb/ids_alert.duckdb
+docker restart ids-duckdb-mgr
+```
+
+### Grafana Plugin Connection Caching
+
+The Grafana DuckDB Go plugin caches its database connection. When `ids-duckdb-mgr` atomically replaces `ids_readonly.duckdb` (via `shutil.copy2` + `os.rename`), the plugin may continue reading the old inode. If Grafana shows 0 rows but `SHOW TABLES` works, restart the container: `docker restart ids-grafana`.
+
+### Dashboard Variable SQL Pattern
+
+Grafana dashboard variables with text values like `Hidden`/`Visible` must **not** be used as SQL string literals. DuckDB treats `HIDDEN` as a reserved keyword, causing a `Parser Error: syntax error at or near "Hidden"` when the Grafana plugin interpolates the variable.
+
+**Broken pattern** (do not use):
+```sql
+CASE WHEN '${show_manufacturer}' = 'Visible' THEN ...
+```
+
+**Correct pattern** (use integer values `0`/`1`):
+```json
+{ "text": "Hidden", "value": "0" }, { "text": "Visible", "value": "1" }
+```
+```sql
+CASE WHEN ${show_manufacturer} = 1 THEN ...
+```
+The `test_sanity.sh` S32 test catches any dashboard that regresses to the broken string-comparison pattern.
