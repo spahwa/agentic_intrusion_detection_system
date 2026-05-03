@@ -41,7 +41,14 @@ MAX_DB_SIZE_MB = int(os.environ.get("MAX_DB_SIZE_MB", "4000"))
 MAX_STAGING_SIZE_MB = int(os.environ.get("MAX_STAGING_SIZE_MB", "1024"))
 MAX_ZEEK_LOGS_SIZE_MB = int(os.environ.get("MAX_ZEEK_LOGS_SIZE_MB", "1024"))
 VACUUM_EVERY_N_CYCLES = 10  # VACUUM every 10 cycles (~10 minutes)
+COMPACT_BLOAT_RATIO = 3.0   # Compact when file is this many times larger than estimated live data
 SUMMARY_REBUILD_EVERY_N_CYCLES = 5  # Rebuild device/external_ips every 5 cycles (~5 min)
+
+# Tables preserved during compaction (OUI/GeoIP are reloaded from cached CSV files)
+TABLES_TO_PRESERVE = [
+    "events", "_ingested_files", "anomaly_events",
+    "_known_devices", "device_baselines", "nmap_scans",
+]
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
 
 # --- Anomaly detection tunables ---
@@ -960,6 +967,71 @@ def vacuum(db: duckdb.DuckDBPyConnection) -> None:
         log.exception("VACUUM failed")
 
 
+def compact_db(db: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
+    """Reclaim space by exporting live data to parquet, recreating the DB, and reimporting.
+
+    DuckDB VACUUM does not shrink the file on disk. The only way to reclaim space from
+    mass deletes is to recreate the file. Called automatically when the DB is bloated
+    (file >> estimated live data size).
+    """
+    parquet_dir = DUCKDB_PATH + ".compact_tmp"
+    os.makedirs(parquet_dir, exist_ok=True)
+    size_before = db_size_mb()
+    event_count = db.execute("SELECT count(*) FROM events").fetchone()[0]
+    log.info("Compacting DB: %.0fMB with %d events — exporting tables...", size_before, event_count)
+
+    try:
+        for table in TABLES_TO_PRESERVE:
+            pq_path = os.path.join(parquet_dir, f"{table}.parquet")
+            try:
+                db.execute(f"COPY {table} TO '{pq_path}' (FORMAT PARQUET)")
+            except Exception:
+                log.warning("compact_db: could not export %s — will be empty after compact", table)
+
+        db.close()
+        os.remove(DUCKDB_PATH)
+
+        db = duckdb.connect(DUCKDB_PATH)
+        init_db(db)  # recreates schema + reloads OUI/GeoIP from cached CSV
+
+        for table in TABLES_TO_PRESERVE:
+            pq_path = os.path.join(parquet_dir, f"{table}.parquet")
+            if os.path.exists(pq_path):
+                try:
+                    db.execute(f"INSERT INTO {table} SELECT * FROM read_parquet('{pq_path}')")
+                except Exception:
+                    log.warning("compact_db: could not reimport %s", table)
+                finally:
+                    try:
+                        os.remove(pq_path)
+                    except OSError:
+                        pass
+
+        try:
+            os.rmdir(parquet_dir)
+        except OSError:
+            pass
+
+        _sync_anomaly_seq(db)
+        size_after = db_size_mb()
+        log.info("Compact complete: %.0fMB → %.0fMB (freed %.0fMB)",
+                 size_before, size_after, size_before - size_after)
+        return db
+
+    except Exception:
+        log.exception("compact_db failed")
+        shutil.rmtree(parquet_dir, ignore_errors=True)
+        if not os.path.exists(DUCKDB_PATH):
+            db = duckdb.connect(DUCKDB_PATH)
+            init_db(db)
+        else:
+            try:
+                db = duckdb.connect(DUCKDB_PATH)
+            except Exception:
+                pass
+        return db
+
+
 def cleanup_staging() -> int:
     """Remove NDJSON staging files older than STAGING_RETENTION_HOURS.
 
@@ -1788,6 +1860,18 @@ def main() -> None:
                 # Sync sequence past alert_state IDs to prevent collision after recreation
                 _sync_anomaly_seq(db)
                 data_changed = True
+            elif db_size_mb() > MAX_DB_SIZE_MB * 0.8:
+                # DB is 80%+ of the size limit — check for bloat relative to live data.
+                # Estimate ~1500 bytes/event (typical Zeek/Suricata JSON).
+                estimated_live_mb = max(event_count * 1500 / (1024 * 1024), 1.0)
+                bloat_ratio = db_size_mb() / estimated_live_mb
+                if bloat_ratio > COMPACT_BLOAT_RATIO:
+                    log.info(
+                        "DB bloat: %.0fMB for %d events (~%.0fMB live, %.0fx bloat) — compacting",
+                        db_size_mb(), event_count, estimated_live_mb, bloat_ratio,
+                    )
+                    db = compact_db(db)
+                    data_changed = True
 
             # 3. Drain IPWatcher fast alerts → _known_devices + anomaly_events
             drained = drain_fast_alerts(db)

@@ -14,7 +14,7 @@ from tools import TOOL_DEFINITIONS, TOOL_MAP
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:2b")
 DUCKDB_PATH = os.environ.get("DUCKDB_PATH", "/var/log/ids/duckdb/ids_readonly.duckdb")
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 10
 NUM_CTX = 4096
 NUM_THREAD = int(os.environ.get("OLLAMA_NUM_THREAD", "4"))
 

@@ -16,11 +16,11 @@
         "name": "show_mac",
         "type": "custom",
         "label": "MAC Addresses",
-        "query": "Hidden,Visible",
-        "current": { "text": "Hidden", "value": "Hidden" },
+        "query": "Hidden : 0,Visible : 1",
+        "current": { "text": "Hidden", "value": "0" },
         "options": [
-          { "text": "Hidden", "value": "Hidden", "selected": true },
-          { "text": "Visible", "value": "Visible", "selected": false }
+          { "text": "Hidden", "value": "0", "selected": true },
+          { "text": "Visible", "value": "1", "selected": false }
         ],
         "includeAll": false,
         "multi": false
@@ -29,11 +29,11 @@
         "name": "show_manufacturer",
         "type": "custom",
         "label": "Manufacturer",
-        "query": "Hidden,Visible",
-        "current": { "text": "Hidden", "value": "Hidden" },
+        "query": "Hidden : 0,Visible : 1",
+        "current": { "text": "Hidden", "value": "0" },
         "options": [
-          { "text": "Hidden", "value": "Hidden", "selected": true },
-          { "text": "Visible", "value": "Visible", "selected": false }
+          { "text": "Hidden", "value": "0", "selected": true },
+          { "text": "Visible", "value": "1", "selected": false }
         ],
         "includeAll": false,
         "multi": false
@@ -42,11 +42,11 @@
         "name": "show_hostname",
         "type": "custom",
         "label": "Hostname",
-        "query": "Hidden,Visible",
-        "current": { "text": "Hidden", "value": "Hidden" },
+        "query": "Hidden : 0,Visible : 1",
+        "current": { "text": "Hidden", "value": "0" },
         "options": [
-          { "text": "Hidden", "value": "Hidden", "selected": true },
-          { "text": "Visible", "value": "Visible", "selected": false }
+          { "text": "Hidden", "value": "0", "selected": true },
+          { "text": "Visible", "value": "1", "selected": false }
         ],
         "includeAll": false,
         "multi": false
@@ -307,7 +307,7 @@
       "targets": [
         {
           "refId": "A",
-          "rawSql": "SELECT ip, CASE WHEN '${show_mac}' = 'Visible' THEN mac ELSE regexp_replace(COALESCE(mac, 'N/A'), '[0-9a-fA-F]', '*', 'g') END AS mac, CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(manufacturer, 'Unknown') ELSE '***' END AS manufacturer, CASE WHEN '${show_hostname}' = 'Visible' THEN COALESCE(hostname, 'N/A') ELSE '***' END AS hostname, total_conns, total_bytes, protocols, services FROM devices ORDER BY total_conns DESC LIMIT 50",
+          "rawSql": "SELECT ip, CASE WHEN ${show_mac} = 1 THEN mac ELSE regexp_replace(COALESCE(mac, 'N/A'), '[0-9a-fA-F]', '*', 'g') END AS mac, CASE WHEN ${show_manufacturer} = 1 THEN COALESCE(manufacturer, 'Unknown') ELSE '***' END AS manufacturer, CASE WHEN ${show_hostname} = 1 THEN COALESCE(hostname, 'N/A') ELSE '***' END AS hostname, total_conns, total_bytes, protocols, services FROM devices ORDER BY total_conns DESC LIMIT 50",
           "format": 0
         }
       ],
@@ -352,7 +352,7 @@
       "targets": [
         {
           "refId": "A",
-          "rawSql": "SELECT CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(manufacturer, 'Unknown') || ' (' || ip || ')' ELSE ip END AS device, total_conns, total_bytes FROM devices ORDER BY total_bytes DESC LIMIT 5",
+          "rawSql": "SELECT CASE WHEN ${show_manufacturer} = 1 THEN COALESCE(manufacturer, 'Unknown') || ' (' || ip || ')' ELSE ip END AS device, total_conns, total_bytes FROM devices ORDER BY total_bytes DESC LIMIT 5",
           "format": 0
         }
       ],
@@ -402,7 +402,7 @@
       "targets": [
         {
           "refId": "A",
-          "rawSql": "SELECT CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(manufacturer, 'Unknown') ELSE '***' END AS manufacturer, count(*) AS count FROM devices GROUP BY 1 ORDER BY 2 DESC",
+          "rawSql": "SELECT CASE WHEN ${show_manufacturer} = 1 THEN COALESCE(manufacturer, 'Unknown') ELSE '***' END AS manufacturer, count(*) AS count FROM devices GROUP BY 1 ORDER BY 2 DESC",
           "format": 0
         }
       ],
@@ -446,7 +446,7 @@
       "targets": [
         {
           "refId": "A",
-          "rawSql": "SELECT timestamp, json_extract_string(raw, '$.assigned_addr') as assigned_ip, CASE WHEN '${show_mac}' = 'Visible' THEN json_extract_string(raw, '$.mac') ELSE regexp_replace(COALESCE(json_extract_string(raw, '$.mac'), 'N/A'), '[0-9a-fA-F]', '*', 'g') END as mac_address, json_extract_string(raw, '$.server_addr') as dhcp_server, json_extract_string(raw, '$.domain') as domain, CAST(json_extract(raw, '$.lease_time') AS DOUBLE) as lease_seconds\nFROM events WHERE source_tool='zeek' AND log_type='dhcp' AND $__timeFilter(timestamp) ORDER BY timestamp DESC LIMIT 50",
+          "rawSql": "SELECT timestamp, json_extract_string(raw, '$.assigned_addr') as assigned_ip, CASE WHEN ${show_mac} = 1 THEN json_extract_string(raw, '$.mac') ELSE regexp_replace(COALESCE(json_extract_string(raw, '$.mac'), 'N/A'), '[0-9a-fA-F]', '*', 'g') END as mac_address, json_extract_string(raw, '$.server_addr') as dhcp_server, json_extract_string(raw, '$.domain') as domain, CAST(json_extract(raw, '$.lease_time') AS DOUBLE) as lease_seconds\nFROM events WHERE source_tool='zeek' AND log_type='dhcp' AND $__timeFilter(timestamp) ORDER BY timestamp DESC LIMIT 50",
           "format": 0
         }
       ],

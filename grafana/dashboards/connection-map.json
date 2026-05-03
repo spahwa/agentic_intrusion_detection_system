@@ -16,11 +16,11 @@
         "name": "show_manufacturer",
         "type": "custom",
         "label": "Manufacturer",
-        "query": "Hidden,Visible",
-        "current": { "text": "Hidden", "value": "Hidden" },
+        "query": "Hidden : 0,Visible : 1",
+        "current": { "text": "Hidden", "value": "0" },
         "options": [
-          { "text": "Hidden", "value": "Hidden", "selected": true },
-          { "text": "Visible", "value": "Visible", "selected": false }
+          { "text": "Hidden", "value": "0", "selected": true },
+          { "text": "Visible", "value": "1", "selected": false }
         ],
         "includeAll": false,
         "multi": false
@@ -302,7 +302,7 @@
       "targets": [
         {
           "refId": "A",
-          "rawSql": "WITH raw_conns AS ( SELECT json_extract_string(raw, '$.\"id.orig_h\"') AS src_ip, json_extract_string(raw, '$.\"id.resp_h\"') AS dst_ip, json_extract_string(raw, '$.\"id.resp_p\"') AS dst_port, json_extract_string(raw, '$.service') AS service, COALESCE(CAST(json_extract(raw, '$.orig_bytes') AS BIGINT), 0) + COALESCE(CAST(json_extract(raw, '$.resp_bytes') AS BIGINT), 0) AS total_bytes FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) ) SELECT rc.src_ip, CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(ds.manufacturer, '') ELSE '***' END AS src_manufacturer, rc.dst_ip, CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(dd.manufacturer, ei.country, '') ELSE COALESCE(ei.country, '***') END AS dst_info, CAST(COUNT(*) AS BIGINT) AS connections, CAST(SUM(rc.total_bytes) AS BIGINT) AS bytes, MODE(COALESCE(rc.service, rc.dst_port)) AS top_service FROM raw_conns rc LEFT JOIN devices ds ON ds.ip = rc.src_ip LEFT JOIN devices dd ON dd.ip = rc.dst_ip LEFT JOIN external_ips ei ON ei.ip = rc.dst_ip GROUP BY rc.src_ip, ds.manufacturer, rc.dst_ip, dd.manufacturer, ei.country ORDER BY connections DESC LIMIT 50",
+          "rawSql": "WITH raw_conns AS ( SELECT json_extract_string(raw, '$.\"id.orig_h\"') AS src_ip, json_extract_string(raw, '$.\"id.resp_h\"') AS dst_ip, json_extract_string(raw, '$.\"id.resp_p\"') AS dst_port, json_extract_string(raw, '$.service') AS service, COALESCE(CAST(json_extract(raw, '$.orig_bytes') AS BIGINT), 0) + COALESCE(CAST(json_extract(raw, '$.resp_bytes') AS BIGINT), 0) AS total_bytes FROM events WHERE source_tool='zeek' AND log_type='conn' AND $__timeFilter(timestamp) ) SELECT rc.src_ip, CASE WHEN ${show_manufacturer} = 1 THEN COALESCE(ds.manufacturer, '') ELSE '***' END AS src_manufacturer, rc.dst_ip, CASE WHEN ${show_manufacturer} = 1 THEN COALESCE(dd.manufacturer, ei.country, '') ELSE COALESCE(ei.country, '***') END AS dst_info, CAST(COUNT(*) AS BIGINT) AS connections, CAST(SUM(rc.total_bytes) AS BIGINT) AS bytes, MODE(COALESCE(rc.service, rc.dst_port)) AS top_service FROM raw_conns rc LEFT JOIN devices ds ON ds.ip = rc.src_ip LEFT JOIN devices dd ON dd.ip = rc.dst_ip LEFT JOIN external_ips ei ON ei.ip = rc.dst_ip GROUP BY rc.src_ip, ds.manufacturer, rc.dst_ip, dd.manufacturer, ei.country ORDER BY connections DESC LIMIT 50",
           "format": 0
         }
       ],

@@ -16,11 +16,11 @@
         "name": "show_mac",
         "type": "custom",
         "label": "MAC Addresses",
-        "query": "Hidden,Visible",
-        "current": { "text": "Hidden", "value": "Hidden" },
+        "query": "Hidden : 0,Visible : 1",
+        "current": { "text": "Hidden", "value": "0" },
         "options": [
-          { "text": "Hidden", "value": "Hidden", "selected": true },
-          { "text": "Visible", "value": "Visible", "selected": false }
+          { "text": "Hidden", "value": "0", "selected": true },
+          { "text": "Visible", "value": "1", "selected": false }
         ],
         "includeAll": false,
         "multi": false
@@ -29,11 +29,11 @@
         "name": "show_manufacturer",
         "type": "custom",
         "label": "Manufacturer",
-        "query": "Hidden,Visible",
-        "current": { "text": "Hidden", "value": "Hidden" },
+        "query": "Hidden : 0,Visible : 1",
+        "current": { "text": "Hidden", "value": "0" },
         "options": [
-          { "text": "Hidden", "value": "Hidden", "selected": true },
-          { "text": "Visible", "value": "Visible", "selected": false }
+          { "text": "Hidden", "value": "0", "selected": true },
+          { "text": "Visible", "value": "1", "selected": false }
         ],
         "includeAll": false,
         "multi": false
@@ -42,11 +42,11 @@
         "name": "show_hostname",
         "type": "custom",
         "label": "Hostname",
-        "query": "Hidden,Visible",
-        "current": { "text": "Hidden", "value": "Hidden" },
+        "query": "Hidden : 0,Visible : 1",
+        "current": { "text": "Hidden", "value": "0" },
         "options": [
-          { "text": "Hidden", "value": "Hidden", "selected": true },
-          { "text": "Visible", "value": "Visible", "selected": false }
+          { "text": "Hidden", "value": "0", "selected": true },
+          { "text": "Visible", "value": "1", "selected": false }
         ],
         "includeAll": false,
         "multi": false
@@ -576,7 +576,7 @@
       "targets": [
         {
           "refId": "A",
-          "rawSql": "SELECT ip AS \"IP\", CASE WHEN '${show_mac}' = 'Visible' THEN mac ELSE regexp_replace(COALESCE(mac, 'N/A'), '[0-9a-fA-F]', '*', 'g') END AS \"MAC\", CASE WHEN '${show_manufacturer}' = 'Visible' THEN COALESCE(manufacturer, 'Unknown') ELSE '***' END AS \"Manufacturer\", CASE WHEN '${show_hostname}' = 'Visible' THEN COALESCE(hostname, 'N/A') ELSE '***' END AS \"Hostname\", total_conns AS \"Connections\", CAST(total_bytes AS BIGINT) AS \"Bytes\" FROM devices ORDER BY total_conns DESC",
+          "rawSql": "SELECT ip AS \"IP\", CASE WHEN ${show_mac} = 1 THEN mac ELSE regexp_replace(COALESCE(mac, 'N/A'), '[0-9a-fA-F]', '*', 'g') END AS \"MAC\", CASE WHEN ${show_manufacturer} = 1 THEN COALESCE(manufacturer, 'Unknown') ELSE '***' END AS \"Manufacturer\", CASE WHEN ${show_hostname} = 1 THEN COALESCE(hostname, 'N/A') ELSE '***' END AS \"Hostname\", total_conns AS \"Connections\", CAST(total_bytes AS BIGINT) AS \"Bytes\" FROM devices ORDER BY total_conns DESC",
           "format": 0
         }
       ],

@@ -375,6 +375,42 @@ print(' '.join(keys))" 2>/dev/null || echo "")
         fail "S30: alert-agent/main.py missing rag_search_threat_intel pre-enrichment"
     fi
 
+    # ---- S12. DuckDB Version Alignment ----
+    # Root cause: duckdb Python version must match the version embedded in the Grafana Go plugin.
+    # Mismatches cause the plugin to silently return 0 rows for all queries.
+    section "S12. DuckDB Version Alignment"
+
+    GRAFANA_PLUGIN_DUCKDB_VER="1.4.1"   # Version embedded in motherduck-duckdb-datasource v0.4.0
+    for req_file in duckdb-mgr/requirements.txt streamlit/requirements.txt alert-agent/requirements.txt; do
+        FULL_REQ="$PROJECT_ROOT/$req_file"
+        if [ -f "$FULL_REQ" ]; then
+            PINNED=$(grep -E '^duckdb==' "$FULL_REQ" | cut -d= -f3 || echo "")
+            if [ "$PINNED" = "$GRAFANA_PLUGIN_DUCKDB_VER" ]; then
+                pass "S31: $req_file pins duckdb==$GRAFANA_PLUGIN_DUCKDB_VER (matches Grafana plugin)"
+            elif [ -z "$PINNED" ]; then
+                fail "S31: $req_file does not pin duckdb version (must be duckdb==$GRAFANA_PLUGIN_DUCKDB_VER)"
+            else
+                fail "S31: $req_file pins duckdb==$PINNED but Grafana plugin embeds $GRAFANA_PLUGIN_DUCKDB_VER — mismatch will cause Grafana to show 0 rows"
+            fi
+        fi
+    done
+
+    # ---- S13. Grafana Dashboard Variable SQL Safety ----
+    # Root cause: DuckDB treats HIDDEN/VISIBLE as reserved keywords. Dashboard variables with
+    # text values like "Hidden"/"Visible" must use integer values (0/1) in SQL to avoid
+    # "syntax error at or near 'Hidden'" from the Grafana DuckDB plugin's variable interpolation.
+    section "S13. Grafana Dashboard Variable SQL Safety"
+
+    for dash in "$PROJECT_ROOT/grafana/dashboards/"*.json; do
+        DASH_NAME=$(basename "$dash")
+        # Check for string-valued variables used in SQL string comparisons (the broken pattern)
+        if grep -q "= 'Visible'\|= 'Hidden'" "$dash" 2>/dev/null; then
+            fail "S32: $DASH_NAME contains string comparison against 'Hidden'/'Visible' — use integer values (0/1) instead to avoid DuckDB keyword collision"
+        else
+            pass "S32: $DASH_NAME has no unsafe Hidden/Visible string comparisons"
+        fi
+    done
+
 fi # end static tests
 
 # =============================================================================
@@ -700,6 +736,74 @@ db.close()
         warn "R25: Only $DASH_COUNT dashboards loaded (expected 6+)"
     else
         fail "R25: No dashboards found"
+    fi
+
+    # R25b: Grafana datasource actually returns data (not just provisioned)
+    # Root cause: plugin can be provisioned but return 0 rows due to DuckDB version mismatch
+    # or stale connection cache — this test catches both.
+    DS_ID=$(curl -sf -u admin:admin "http://localhost:${GRAFANA_PORT}/api/datasources" 2>/dev/null \
+        | python3 -c "import sys,json; ds=json.load(sys.stdin); print(ds[0]['id'] if ds else '')" 2>/dev/null || echo "")
+    if [ -n "$DS_ID" ]; then
+        NOW_MS=$(date -u +%s%3N)
+        FROM_MS=$(( NOW_MS - 3600000 ))
+        GF_ROW_COUNT=$(curl -sf -u admin:admin \
+            -X POST "http://localhost:${GRAFANA_PORT}/api/ds/query?ds_type=motherduck-duckdb-datasource" \
+            -H "Content-Type: application/json" \
+            -d "{\"queries\":[{\"refId\":\"A\",\"datasourceId\":${DS_ID},\"rawSql\":\"SELECT count(*) as c FROM events\",\"format\":0}],\"from\":\"${FROM_MS}\",\"to\":\"${NOW_MS}\"}" \
+            2>/dev/null \
+            | python3 -c "
+import sys,json
+r=json.load(sys.stdin)
+frames=r.get('results',{}).get('A',{}).get('frames',[])
+print(frames[0]['data']['values'][0][0] if frames and frames[0]['data']['values'] else 0)
+" 2>/dev/null || echo "ERROR")
+        if [ "$GF_ROW_COUNT" = "ERROR" ]; then
+            warn "R25b: Could not query Grafana datasource API"
+        elif [ "$GF_ROW_COUNT" -gt 0 ] 2>/dev/null; then
+            pass "R25b: Grafana datasource returns live data ($GF_ROW_COUNT events)"
+        else
+            fail "R25b: Grafana datasource returns 0 rows for events table — likely DuckDB version mismatch or stale plugin connection (restart ids-grafana to fix)"
+        fi
+
+        # R25c: Check Grafana plugin error log for known SQL syntax failures
+        GF_SQL_ERR=$(docker logs ids-grafana 2>&1 | grep -c "syntax error at or near" || echo "0")
+        if [ "$GF_SQL_ERR" -gt 0 ]; then
+            warn "R25c: Grafana plugin logged $GF_SQL_ERR SQL syntax error(s) — check dashboard variable interpolation"
+        else
+            pass "R25c: No SQL syntax errors in Grafana plugin logs"
+        fi
+    else
+        warn "R25b: Could not get datasource ID — skipping live data check"
+    fi
+
+    # R25d: Snapshot files are fresh (updated within last 10 minutes)
+    # Root cause: if duckdb-mgr is stuck (e.g., nmap blocking) snapshots go stale and Grafana shows old data
+    SNAP_AGE_LIMIT=600  # 10 minutes in seconds
+    for snap in ids_readonly.duckdb ids_streamlit.duckdb ids_alert.duckdb; do
+        SNAP_PATH="${LOG_DIR}/duckdb/$snap"
+        if [ -f "$SNAP_PATH" ]; then
+            SNAP_MTIME=$(stat -c %Y "$SNAP_PATH" 2>/dev/null || echo "0")
+            NOW_S=$(date +%s)
+            AGE=$(( NOW_S - SNAP_MTIME ))
+            if [ "$AGE" -le "$SNAP_AGE_LIMIT" ]; then
+                pass "R25d: $snap is fresh (${AGE}s old)"
+            else
+                warn "R25d: $snap is stale (${AGE}s old — expected <${SNAP_AGE_LIMIT}s) — duckdb-mgr may be blocked"
+            fi
+        else
+            warn "R25d: $snap not yet created (first cycle may not have run)"
+        fi
+    done
+
+    # R25e: DuckDB size within configured limit
+    MAX_DB_MB="${MAX_DB_SIZE_MB:-4000}"
+    if [ -f "${LOG_DIR}/duckdb/ids.duckdb" ]; then
+        DB_SIZE_MB=$(du -m "${LOG_DIR}/duckdb/ids.duckdb" 2>/dev/null | cut -f1 || echo "0")
+        if [ "$DB_SIZE_MB" -lt "$MAX_DB_MB" ] 2>/dev/null; then
+            pass "R25e: DuckDB size ${DB_SIZE_MB}MB is within ${MAX_DB_MB}MB limit"
+        else
+            fail "R25e: DuckDB size ${DB_SIZE_MB}MB exceeds ${MAX_DB_MB}MB limit — ingestion is blocked, Grafana may show stale data"
+        fi
     fi
 
     # ---- R9. Ollama ----
