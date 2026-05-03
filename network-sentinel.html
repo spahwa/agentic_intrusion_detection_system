@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Network Sentinel — Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+  :root{
+    --bg:        #0a0a0f;
+    --surface:   #14141d;
+    --surface-2: #1a1a25;
+    --border:    rgba(255,255,255,0.08);
+    --border-2:  rgba(255,255,255,0.16);
+    --text:      #f5f5f7;
+    --text-2:    #a8a8b3;
+    --text-3:    #5e5e6c;
+
+    /* one distinct hue per block */
+    --c-net:    #60a5fa;   /* blue   */
+    --c-sens:   #22d3ee;   /* cyan   */
+    --c-vec:    #a78bfa;   /* violet */
+    --c-db:     #ec4899;   /* pink   */
+    --c-graf:   #fb923c;   /* amber  */
+    --c-chat:   #10b981;   /* emerald*/
+    --c-alert:  #f43f5e;   /* rose   */
+    --c-gmail:  #fbbf24;   /* gold   */
+    --c-slm:    #c084fc;   /* purple — shared LLM */
+  }
+
+  html,body{
+    height:100%;
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Inter Tight','Inter',system-ui,-apple-system,sans-serif;
+    font-feature-settings:'cv02','cv03','cv04','cv11';
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+    overflow-x:hidden;
+  }
+  body{
+    background:
+      radial-gradient(900px 600px at 15% 5%,  rgba(96,165,250,.07), transparent 60%),
+      radial-gradient(900px 600px at 50% 45%, rgba(236,72,153,.09), transparent 60%),
+      radial-gradient(900px 600px at 85% 95%, rgba(251,113,133,.07), transparent 60%),
+      var(--bg);
+    background-image:
+      radial-gradient(900px 600px at 15% 5%,  rgba(96,165,250,.07), transparent 60%),
+      radial-gradient(900px 600px at 50% 45%, rgba(236,72,153,.09), transparent 60%),
+      radial-gradient(900px 600px at 85% 95%, rgba(251,113,133,.07), transparent 60%),
+      linear-gradient(var(--bg), var(--bg)),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><circle cx='1' cy='1' r='1' fill='%23ffffff' fill-opacity='0.025'/></svg>");
+    min-height:100vh;
+    padding:44px 56px 36px;
+    display:flex;flex-direction:column;
+  }
+
+  /* ───────── Header ───────── */
+  header{
+    display:flex;justify-content:space-between;align-items:flex-start;
+    margin-bottom:36px;flex-shrink:0;
+  }
+  .brand{display:flex;align-items:center;gap:14px}
+  .brand-mark{
+    width:34px;height:34px;border-radius:9px;
+    background:conic-gradient(from 220deg,var(--c-net),var(--c-sens),var(--c-vec),var(--c-db),var(--c-alert),var(--c-graf),var(--c-net));
+    box-shadow:0 0 28px rgba(236,72,153,.30);
+    position:relative;
+  }
+  .brand-mark::after{content:"";position:absolute;inset:5px;border-radius:5px;background:var(--bg);}
+  .brand-mark::before{
+    content:"";position:absolute;left:50%;top:50%;width:6px;height:6px;border-radius:50%;
+    transform:translate(-50%,-50%);background:#fff;z-index:1;box-shadow:0 0 12px #fff;
+  }
+  .title-row{
+    display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;
+  }
+  .title-row::before{
+    content:"";
+    align-self:stretch;
+    width:1px;background:var(--border-2);
+    margin:4px 0;
+    order:1;
+  }
+  h1{font-size:1.95rem;font-weight:700;letter-spacing:-0.022em;flex-shrink:0}
+  .subtitle{
+    font-size:1.25rem;color:var(--text-2);
+    font-weight:400;letter-spacing:-0.005em;line-height:1.3;
+    order:2;
+  }
+  .meta{display:flex;gap:32px;align-items:center}
+  .meta-item{text-align:right}
+  .meta-item .v{font-size:0.92rem;font-weight:600;color:var(--text);font-family:'JetBrains Mono',monospace;letter-spacing:-0.01em}
+  .meta-item .l{font-size:0.6rem;color:var(--text-3);text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-top:3px}
+
+  /* ───────── Tier label ───────── */
+  .tier{
+    font-size:0.6rem;font-weight:700;color:var(--text-3);
+    text-transform:uppercase;letter-spacing:0.22em;
+    display:flex;align-items:center;gap:14px;
+    margin-bottom:14px;flex-shrink:0;
+  }
+  .tier::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--border-2),transparent);}
+
+  /* ───────── Row layouts ───────── */
+  .row-inputs{
+    display:grid;
+    grid-template-columns: 1fr 72px 1fr 72px 1fr;
+    align-items:stretch;
+    gap:0;
+    flex-shrink:0;
+  }
+  .row-hub{
+    display:flex;justify-content:center;
+    flex-shrink:0;
+  }
+  .row-consumers{
+    display:grid;grid-template-columns:repeat(3,1fr);gap:18px;
+    flex-shrink:0;
+  }
+
+  /* ───────── Block (uses --c set per variant) ───────── */
+  .block{
+    --c: #fff;
+    background:
+      linear-gradient(160deg, color-mix(in srgb, var(--c) 6%, var(--surface)) 0%, var(--surface-2) 100%);
+    border:1px solid color-mix(in srgb, var(--c) 28%, transparent);
+    border-radius:14px;
+    padding:18px 20px 16px;
+    display:flex;flex-direction:column;gap:8px;
+    position:relative;overflow:hidden;
+    transition:transform .25s, border-color .25s;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.03) inset,
+      0 0 32px color-mix(in srgb, var(--c) 8%, transparent);
+    min-height:148px;
+  }
+  .block::before{
+    content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
+    background:var(--c);
+  }
+  .block::after{
+    content:"";position:absolute;right:-30px;bottom:-30px;width:120px;height:120px;border-radius:50%;
+    background:radial-gradient(circle, color-mix(in srgb, var(--c) 22%, transparent), transparent 70%);
+    pointer-events:none;
+  }
+  .block:hover{
+    transform:translateY(-2px);
+    border-color:color-mix(in srgb, var(--c) 50%, transparent);
+  }
+
+  .b-head{display:flex;align-items:center;justify-content:space-between}
+  .b-icon{
+    width:28px;height:28px;border-radius:7px;
+    background:var(--c);color:var(--bg);
+    display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:0.78rem;
+    font-family:'JetBrains Mono',monospace;
+    box-shadow:0 0 20px color-mix(in srgb, var(--c) 50%, transparent);
+  }
+  .b-num{
+    font-family:'JetBrains Mono',monospace;
+    font-size:0.6rem;color:var(--text-3);letter-spacing:0.16em;font-weight:500;
+  }
+  .b-label{
+    font-size:0.6rem;font-weight:700;
+    text-transform:uppercase;letter-spacing:0.20em;
+    color:var(--c);
+  }
+  .b-name{
+    font-size:1.7rem;font-weight:700;letter-spacing:-0.024em;color:var(--text);line-height:1.1;
+  }
+  .b-desc{font-size:0.78rem;color:var(--text-2);line-height:1.5;font-weight:400}
+  .b-pills{display:flex;flex-wrap:wrap;gap:5px;margin-top:auto;padding-top:4px}
+  .pill{
+    font-family:'JetBrains Mono',monospace;
+    font-size:0.6rem;color:var(--text-2);
+    background:rgba(255,255,255,.04);
+    border:1px solid var(--border);
+    padding:2px 7px;border-radius:5px;font-weight:500;
+  }
+
+  /* Trigger badge — sits in the b-head row, signals what wakes a block up */
+  .trigger{
+    display:inline-flex;align-items:center;gap:7px;
+    padding:4px 10px 4px 8px;
+    border-radius:99px;
+    font-family:'JetBrains Mono',monospace;
+    font-weight:700;
+    background:linear-gradient(90deg,
+      color-mix(in srgb, var(--c) 18%, transparent) 0%,
+      color-mix(in srgb, var(--c) 6%, transparent) 100%);
+    border:1px solid color-mix(in srgb, var(--c) 40%, transparent);
+  }
+  .trigger .glyph{font-size:0.78rem;line-height:1}
+  .trigger .lbl{
+    font-size:0.55rem;letter-spacing:0.16em;
+    text-transform:uppercase;color:var(--c);
+  }
+
+  /* Engine badge — for showing the SLM that powers a block */
+  .b-engine{
+    display:inline-flex;align-items:center;gap:9px;
+    align-self:flex-start;
+    margin-top:auto;
+    padding:5px 11px 5px 9px;
+    background:linear-gradient(90deg,
+      color-mix(in srgb, var(--c) 14%, transparent) 0%,
+      color-mix(in srgb, var(--c) 4%, transparent) 100%);
+    border:1px solid color-mix(in srgb, var(--c) 35%, transparent);
+    border-radius:7px;
+    box-shadow:0 0 16px color-mix(in srgb, var(--c) 12%, transparent);
+  }
+  .b-engine .spark{
+    width:7px;height:7px;border-radius:50%;
+    background:var(--c);
+    box-shadow:0 0 8px var(--c);
+    animation:sparkPulse 1.8s ease-in-out infinite;
+  }
+  @keyframes sparkPulse{
+    0%,100%{opacity:.55;transform:scale(.85)}
+    50%{opacity:1;transform:scale(1.1)}
+  }
+  .b-engine .tag{
+    font-family:'JetBrains Mono',monospace;
+    font-size:0.56rem;font-weight:700;letter-spacing:0.18em;
+    text-transform:uppercase;color:var(--c);
+  }
+  .b-engine .sep{color:color-mix(in srgb, var(--c) 50%, transparent);font-weight:600}
+  .b-engine .name{
+    font-size:0.8rem;font-weight:700;letter-spacing:-0.005em;
+    color:var(--text);
+  }
+
+  /* per-block colors */
+  .block.net    {--c:var(--c-net)}
+  .block.sens   {--c:var(--c-sens)}
+  .block.vec    {--c:var(--c-vec)}
+  .block.db     {--c:var(--c-db)}
+  .block.graf   {--c:var(--c-graf)}
+  .block.chat   {--c:var(--c-chat)}
+  .block.alert  {--c:var(--c-alert)}
+  .block.gmail  {--c:var(--c-gmail)}
+  .block.slm    {--c:var(--c-slm)}
+
+  /* Tool-style block — smaller, denser, for external tools the LLM invokes */
+  .block.tool{
+    width:min(460px, 44%);
+    min-height:auto;
+    padding:14px 18px 14px;
+  }
+  .block.tool .b-name{font-size:1.4rem}
+  .block.tool .b-desc{font-size:0.78rem}
+  .block.tool .b-num{
+    color:var(--c);font-weight:700;letter-spacing:0.16em;
+  }
+  .block.tool code{
+    font-family:'JetBrains Mono',monospace;
+    font-size:0.72rem;color:var(--text);
+    background:rgba(255,255,255,.06);
+    border:1px solid var(--border);
+    padding:1px 6px;border-radius:4px;
+  }
+
+  .row-tools{
+    display:flex;justify-content:center;
+    flex-shrink:0;
+  }
+  .bridge-tools{
+    height:64px;width:100%;flex-shrink:0;position:relative;
+  }
+  .bridge-tools svg{display:block;width:100%;height:100%}
+
+  /* DuckDB hub: bigger, centered, more prominent */
+  .block.db{
+    width:min(640px, 60%);
+    min-height:130px;
+    padding:18px 26px 16px;
+    border-width:1.5px;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.04) inset,
+      0 0 60px color-mix(in srgb, var(--c-db) 18%, transparent),
+      0 12px 32px rgba(0,0,0,.25);
+  }
+  .block.db .b-name{font-size:2rem}
+  .block.db .b-desc{font-size:0.86rem}
+  .block.db::before{width:4px}
+
+  /* ───────── Horizontal arrow column (between input blocks) ───────── */
+  .arrow-h{
+    display:flex;align-items:center;justify-content:center;
+    position:relative;
+  }
+  .arrow-h svg{display:block;width:64px;height:32px;overflow:visible}
+  .arrow-h .line{
+    stroke:rgba(255,255,255,0.38);
+    stroke-width:2.6;
+    stroke-dasharray:5 5;
+    stroke-linecap:round;
+  }
+  .arrow-h .head{fill:rgba(255,255,255,0.82)}
+  .arrow-h .flow{
+    fill:#ffffff;opacity:.95;
+    filter:drop-shadow(0 0 8px rgba(255,255,255,0.85));
+    animation:flowH 2.2s linear infinite;
+  }
+  @keyframes flowH{
+    0%{transform:translateX(-28px);opacity:0}
+    18%{opacity:1}
+    82%{opacity:1}
+    100%{transform:translateX(28px);opacity:0}
+  }
+  .row-inputs .arrow-h:nth-of-type(2) .flow{animation-delay:.0s}
+  .row-inputs .arrow-h:nth-of-type(4) .flow{animation-delay:.5s}
+
+  /* ───────── Vertical bridge (Vector → DuckDB) ───────── */
+  .bridge-down{
+    height:64px;width:100%;flex-shrink:0;position:relative;
+  }
+  .bridge-down svg{display:block;width:100%;height:100%}
+
+  /* ───────── Fan-out (DuckDB → 3 consumers) ───────── */
+  .bridge-fanout{
+    height:90px;width:100%;flex-shrink:0;position:relative;
+  }
+  .bridge-fanout svg{display:block;width:100%;height:100%}
+
+  /* ───────── Footer ───────── */
+  footer{
+    margin-top:auto;padding-top:24px;
+    display:flex;justify-content:space-between;align-items:center;
+    flex-shrink:0;flex-wrap:wrap;gap:12px;
+  }
+  .legend{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+  .legend-item{
+    display:flex;align-items:center;gap:7px;
+    font-size:0.62rem;color:var(--text-2);font-weight:500;letter-spacing:0.04em;
+  }
+  .legend-dot{width:7px;height:7px;border-radius:50%}
+  .footer-meta{
+    font-family:'JetBrains Mono',monospace;
+    font-size:0.6rem;color:var(--text-3);letter-spacing:0.04em;
+  }
+
+  /* gentle pulse on the DB hub */
+  .pulse-ring{position:absolute;inset:0;border-radius:14px;border:1.5px solid color-mix(in srgb, var(--c-db) 50%, transparent);pointer-events:none;animation:pulseRing 2.6s ease-out infinite;opacity:0}
+  @keyframes pulseRing{
+    0%{transform:scale(1);opacity:.55}
+    100%{transform:scale(1.04);opacity:0}
+  }
+
+  /* responsive */
+  @media (max-width: 1280px){
+    body{padding:28px 20px}
+    .row-inputs{grid-template-columns:1fr;gap:10px}
+    .row-inputs .arrow-h{transform:rotate(90deg);height:24px}
+    .row-consumers{grid-template-columns:1fr}
+    .bridge-down,.bridge-fanout{height:48px}
+    .meta{display:none}
+    .block.db{width:100%}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark"></div>
+    <div class="title-row">
+      <h1>Network Sentinel</h1>
+      <div class="subtitle">A local AI that watches your network. Chat with it, or let one agent watch for you.</div>
+    </div>
+  </div>
+  <div class="meta">
+    <div class="meta-item"><div class="v">100% local</div><div class="l">deployment</div></div>
+    <div class="meta-item"><div class="v">24 h</div><div class="l">memory window</div></div>
+    <div class="meta-item"><div class="v">Qwen 3.5</div><div class="l">on-device LLM</div></div>
+  </div>
+</header>
+
+<!-- ════════════════ INPUTS TIER ════════════════ -->
+<div class="tier">Inputs · captured on the host network interface</div>
+
+<section class="row-inputs">
+
+  <div class="block net">
+    <div class="b-head"><div class="b-icon">N</div><div class="b-num">01</div></div>
+    <div class="b-label">Capture</div>
+    <div class="b-name">Network</div>
+    <div class="b-desc">Live packets are mirrored from the host's physical interfaces in promiscuous mode.</div>
+    <div class="b-pills">
+      <span class="pill">enp1s0f0</span>
+      <span class="pill">wlp2s0</span>
+      <span class="pill">virbr0</span>
+    </div>
+  </div>
+
+  <div class="arrow-h">
+    <svg viewBox="0 0 64 32">
+      <line class="line" x1="2" y1="16" x2="50" y2="16"/>
+      <path class="head" d="M50 8 L64 16 L50 24 Z"/>
+      <circle class="flow" cx="12" cy="16" r="5"/>
+    </svg>
+  </div>
+
+  <div class="block sens">
+    <div class="b-head"><div class="b-icon">S</div><div class="b-num">02</div></div>
+    <div class="b-label">Sensors</div>
+    <div class="b-name">Suricata + Zeek</div>
+    <div class="b-desc">Signature alerts and rich protocol metadata, correlated by community-id.</div>
+    <div class="b-pills">
+      <span class="pill">EVE JSON</span>
+      <span class="pill">conn / dns / ssl</span>
+    </div>
+  </div>
+
+  <div class="arrow-h">
+    <svg viewBox="0 0 64 32">
+      <line class="line" x1="2" y1="16" x2="50" y2="16"/>
+      <path class="head" d="M50 8 L64 16 L50 24 Z"/>
+      <circle class="flow" cx="12" cy="16" r="5"/>
+    </svg>
+  </div>
+
+  <div class="block vec">
+    <div class="b-head"><div class="b-icon">V</div><div class="b-num">03</div></div>
+    <div class="b-label">Pipeline</div>
+    <div class="b-name">Vector</div>
+    <div class="b-desc">Stateless normalization &amp; enrichment. Stages a unified NDJSON stream for storage.</div>
+    <div class="b-pills">
+      <span class="pill">VRL transforms</span>
+      <span class="pill">hourly partitions</span>
+    </div>
+  </div>
+
+</section>
+
+<!-- ════════════════ BRIDGE: Inputs → DB ════════════════ -->
+<div class="bridge-down">
+  <svg viewBox="0 0 1000 64" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="gradDown" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%"  stop-color="#a78bfa"/>
+        <stop offset="100%" stop-color="#ec4899"/>
+      </linearGradient>
+    </defs>
+    <!-- single funnel from Vector area (right ~83%) down to DuckDB (center ~50%) -->
+    <path d="M 833 0 C 833 28, 500 36, 500 64"
+          fill="none" stroke="url(#gradDown)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.7"/>
+    <circle r="4" fill="#fff" opacity="0.95">
+      <animateMotion dur="1.6s" repeatCount="indefinite"
+        path="M 833 0 C 833 28, 500 36, 500 64"/>
+    </circle>
+    <circle r="4" fill="#fff" opacity="0.95">
+      <animateMotion dur="1.6s" repeatCount="indefinite" begin="0.8s"
+        path="M 833 0 C 833 28, 500 36, 500 64"/>
+    </circle>
+  </svg>
+</div>
+
+<!-- ════════════════ HUB TIER ════════════════ -->
+<section class="row-hub">
+  <div class="block db">
+    <div class="pulse-ring"></div>
+    <div class="b-head"><div class="b-icon">D</div><div class="b-num">04 · HUB</div></div>
+    <div class="b-label">Memory · 24-hour rolling store</div>
+    <div class="b-name">DuckDB</div>
+    <div class="b-desc">Every event lands here, enriched with OUI &amp; GeoIP and watched by 7 anomaly detectors. Three read-only snapshots are published every 5 minutes for downstream consumers.</div>
+    <div class="b-pills">
+      <span class="pill">10 tables</span>
+      <span class="pill">3 read snapshots</span>
+      <span class="pill">7 detectors</span>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════ FAN-OUT: DB → Consumers ════════════════ -->
+<div class="bridge-fanout">
+  <svg viewBox="0 0 1000 90" preserveAspectRatio="none">
+    <!-- Path 1: DB center (500,0) → Grafana (167, 90) — far left -->
+    <path id="path-graf"  d="M 500 0 C 500 40, 167 45, 167 90"
+          fill="none" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.65"/>
+    <!-- Path 2: DB center (500,0) → Streamlit Chat (500, 90) — straight down -->
+    <path id="path-chat"  d="M 500 0 L 500 90"
+          fill="none" stroke="#10b981" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.65"/>
+    <!-- Path 3: DB center (500,0) → Alert Agent (833, 90) — far right -->
+    <path id="path-alert" d="M 500 0 C 500 40, 833 45, 833 90"
+          fill="none" stroke="#f43f5e" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.65"/>
+
+    <!-- Arrowheads at the destination (drawn as small triangles in path color) -->
+    <path d="M 161 84 L 167 92 L 173 84 Z" fill="#fb923c"/>
+    <path d="M 494 84 L 500 92 L 506 84 Z" fill="#10b981"/>
+    <path d="M 827 84 L 833 92 L 839 84 Z" fill="#f43f5e"/>
+
+    <!-- Animated dots flowing along each path: 2 per path, staggered, color matches dest -->
+    <circle r="4" fill="#fb923c">
+      <animateMotion dur="2.2s" repeatCount="indefinite"
+        path="M 500 0 C 500 40, 167 45, 167 90"/>
+    </circle>
+    <circle r="4" fill="#fb923c">
+      <animateMotion dur="2.2s" repeatCount="indefinite" begin="1.1s"
+        path="M 500 0 C 500 40, 167 45, 167 90"/>
+    </circle>
+
+    <circle r="4" fill="#10b981">
+      <animateMotion dur="2.2s" repeatCount="indefinite" begin="0.35s"
+        path="M 500 0 L 500 90"/>
+    </circle>
+    <circle r="4" fill="#10b981">
+      <animateMotion dur="2.2s" repeatCount="indefinite" begin="1.45s"
+        path="M 500 0 L 500 90"/>
+    </circle>
+
+    <circle r="4" fill="#f43f5e">
+      <animateMotion dur="2.2s" repeatCount="indefinite" begin="0.7s"
+        path="M 500 0 C 500 40, 833 45, 833 90"/>
+    </circle>
+    <circle r="4" fill="#f43f5e">
+      <animateMotion dur="2.2s" repeatCount="indefinite" begin="1.8s"
+        path="M 500 0 C 500 40, 833 45, 833 90"/>
+    </circle>
+
+    <!-- Subtle labels along the paths -->
+    <text x="290" y="50" fill="#a8a8b3" font-size="9" font-family="'JetBrains Mono',monospace" letter-spacing="1.5">ids_readonly</text>
+    <text x="510" y="50" fill="#a8a8b3" font-size="9" font-family="'JetBrains Mono',monospace" letter-spacing="1.5">ids_streamlit</text>
+    <text x="660" y="50" fill="#a8a8b3" font-size="9" font-family="'JetBrains Mono',monospace" letter-spacing="1.5">ids_alert</text>
+  </svg>
+</div>
+
+<!-- ════════════════ CONSUMERS TIER ════════════════ -->
+<div class="tier">Consumers · each reads its own snapshot of the database</div>
+
+<section class="row-consumers">
+
+  <div class="block graf">
+    <div class="b-head"><div class="b-icon">G</div><div class="b-num">:3000</div></div>
+    <div class="b-label">Visualize</div>
+    <div class="b-name">Grafana</div>
+    <div class="b-desc">9 provisioned dashboards covering traffic, alerts, GeoIP, devices and the connection graph.</div>
+  </div>
+
+  <div class="block chat">
+    <div class="b-head">
+      <div class="b-icon">C</div>
+      <div class="trigger"><span class="glyph">👤</span><span class="lbl">User · Reactive</span></div>
+    </div>
+    <div class="b-label">Conversational</div>
+    <div class="b-name">Streamlit Chat</div>
+    <div class="b-desc">A human asks a question — the message is forwarded to the shared SLM, which picks tools and replies in the chat UI.</div>
+  </div>
+
+  <div class="block alert">
+    <div class="b-head">
+      <div class="b-icon">A</div>
+      <div class="trigger"><span class="glyph">⏱</span><span class="lbl">Event · Autonomous</span></div>
+    </div>
+    <div class="b-label">Agent</div>
+    <div class="b-name">Alert Agent</div>
+    <div class="b-desc">A polling loop hands every new anomaly to the shared SLM, which investigates and emails on its own — no human in the loop.</div>
+  </div>
+
+</section>
+
+<!-- ════════════════ BRIDGE: Chat & Alert → shared SLM ════════════════ -->
+<div class="bridge-tools">
+  <svg viewBox="0 0 1000 64" preserveAspectRatio="none">
+    <!-- Streamlit Chat (500, 0) → SLM (500, 60) — straight down -->
+    <path d="M 500 0 L 500 60"
+          fill="none" stroke="#c084fc" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.65"/>
+    <!-- Alert Agent (833, 0) → SLM (500, 60) — curve down-left -->
+    <path d="M 833 0 C 833 28, 500 30, 500 60"
+          fill="none" stroke="#c084fc" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.65"/>
+
+    <!-- Arrowhead at SLM entry (single, both paths converge) -->
+    <path d="M 494 54 L 500 62 L 506 54 Z" fill="#c084fc"/>
+
+    <!-- Animated prompt-call dots -->
+    <circle r="4" fill="#c084fc">
+      <animateMotion dur="1.9s" repeatCount="indefinite"
+        path="M 500 0 L 500 60"/>
+    </circle>
+    <circle r="4" fill="#c084fc">
+      <animateMotion dur="1.9s" repeatCount="indefinite" begin="0.95s"
+        path="M 833 0 C 833 28, 500 30, 500 60"/>
+    </circle>
+
+    <!-- Inline labels: who is calling -->
+    <text x="510" y="20" fill="#a8a8b3" font-size="9" font-family="'JetBrains Mono',monospace" letter-spacing="1.5">prompt + tools</text>
+    <text x="640" y="46" fill="#a8a8b3" font-size="9" font-family="'JetBrains Mono',monospace" letter-spacing="1.5">prompt + tools</text>
+  </svg>
+</div>
+
+<!-- ════════════════ SLM TIER ════════════════ -->
+<div class="tier">Shared intelligence · one model, two callers</div>
+
+<section class="row-tools">
+  <div class="block tool slm">
+    <div class="b-head"><div class="b-icon">Q</div><div class="b-num">SHARED · LLM</div></div>
+    <div class="b-label">Local model · Ollama :11434</div>
+    <div class="b-name">Qwen 3.5</div>
+    <div class="b-desc">Single on-device <code>SLM</code> serving both Chat and the Alert Agent. Receives prompt + 12 tool definitions, returns either a final answer or a <code>tool_call</code> to execute.</div>
+  </div>
+</section>
+
+<!-- ════════════════ BRIDGE: SLM → Gmail tool ════════════════ -->
+<div class="bridge-tools">
+  <svg viewBox="0 0 1000 64" preserveAspectRatio="none">
+    <!-- SLM (500, 0) → Gmail (500, 60) — straight down -->
+    <path d="M 500 0 L 500 60"
+          fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.65"/>
+    <path d="M 494 54 L 500 62 L 506 54 Z" fill="#fbbf24"/>
+
+    <circle r="4" fill="#fbbf24">
+      <animateMotion dur="1.9s" repeatCount="indefinite"
+        path="M 500 0 L 500 60"/>
+    </circle>
+
+    <text x="510" y="34" fill="#a8a8b3" font-size="9" font-family="'JetBrains Mono',monospace" letter-spacing="1.5">tool_call · send_email()</text>
+  </svg>
+</div>
+
+<!-- ════════════════ TOOLS TIER ════════════════ -->
+<div class="tier">Tools · the SLM picks one and the caller executes it</div>
+
+<section class="row-tools">
+  <div class="block tool gmail">
+    <div class="b-head"><div class="b-icon">@</div><div class="b-num">EXTERNAL · TOOL</div></div>
+    <div class="b-label">Notification</div>
+    <div class="b-name">Gmail SMTP</div>
+    <div class="b-desc">The model emits <code>send_email(to, subject, body)</code>; the calling service delivers via <code>smtp.gmail.com:465</code>.</div>
+  </div>
+</section>
+
+<!-- ════════════════ FOOTER ════════════════ -->
+<footer>
+  <div class="legend">
+    <div class="legend-item"><span class="legend-dot" style="background:var(--c-net)"></span>Network</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--c-sens)"></span>Sensors</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--c-vec)"></span>Pipeline</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--c-db)"></span>DuckDB</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--c-graf)"></span>Grafana</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--c-chat)"></span>Chat</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--c-alert)"></span>Alert</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--c-slm)"></span>Qwen 3.5 · SLM</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--c-gmail)"></span>Gmail · tool</div>
+  </div>
+  <div class="footer-meta">8 services · Docker Compose · No cloud · No subscriptions</div>
+</footer>
+
+</body>
+</html>
