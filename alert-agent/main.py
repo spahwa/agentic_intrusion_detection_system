@@ -35,24 +35,55 @@ NUM_THREAD = int(os.environ.get("OLLAMA_NUM_THREAD", "4"))
 def init_state_db() -> sqlite3.Connection:
     """Initialize the SQLite state DB for tracking processed anomalies."""
     conn = sqlite3.connect(ALERT_STATE_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS processed_anomalies (
-            anomaly_id INTEGER,
-            detected_at TEXT,
-            processed_at TEXT DEFAULT (datetime('now')),
-            email_sent BOOLEAN DEFAULT FALSE,
-            PRIMARY KEY (anomaly_id, detected_at)
-        )
-    """)
-    # Migrate existing single-column PRIMARY KEY tables (add detected_at if missing)
-    try:
-        conn.execute("ALTER TABLE processed_anomalies ADD COLUMN detected_at TEXT")
-        # Re-create with composite PK is not possible in SQLite via ALTER;
-        # existing rows get detected_at=NULL which won't collide with real timestamps.
+
+    # Check whether the table exists and, if so, whether it already has the composite PK.
+    # SQLite CREATE TABLE IF NOT EXISTS never modifies an existing table's PK, so tables
+    # created before the composite-PK migration need to be recreated.
+    needs_recreate = False
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='processed_anomalies'"
+    ).fetchone()
+    if row:
+        pk_cols = [r[1] for r in conn.execute("PRAGMA table_info(processed_anomalies)").fetchall() if r[5] > 0]
+        if "detected_at" not in pk_cols:
+            needs_recreate = True
+
+    if needs_recreate:
+        # Rename old table, create new one with composite PK, copy data, drop old.
+        conn.execute("ALTER TABLE processed_anomalies RENAME TO _processed_anomalies_old")
+        conn.execute("""
+            CREATE TABLE processed_anomalies (
+                anomaly_id  INTEGER,
+                detected_at TEXT,
+                processed_at TEXT DEFAULT (datetime('now')),
+                email_sent  BOOLEAN DEFAULT FALSE,
+                PRIMARY KEY (anomaly_id, detected_at)
+            )
+        """)
+        conn.execute("""
+            INSERT OR IGNORE INTO processed_anomalies
+                (anomaly_id, detected_at, processed_at, email_sent)
+            SELECT anomaly_id,
+                   COALESCE(detected_at, ''),
+                   processed_at,
+                   email_sent
+            FROM _processed_anomalies_old
+        """)
+        conn.execute("DROP TABLE _processed_anomalies_old")
         conn.commit()
-    except Exception:
-        pass  # Column already exists — schema is up to date
-    conn.commit()
+        log.info("Migrated processed_anomalies to composite PK (anomaly_id, detected_at)")
+    else:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS processed_anomalies (
+                anomaly_id  INTEGER,
+                detected_at TEXT,
+                processed_at TEXT DEFAULT (datetime('now')),
+                email_sent  BOOLEAN DEFAULT FALSE,
+                PRIMARY KEY (anomaly_id, detected_at)
+            )
+        """)
+        conn.commit()
+
     return conn
 
 

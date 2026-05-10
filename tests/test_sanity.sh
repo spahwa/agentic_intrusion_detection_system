@@ -411,6 +411,75 @@ print(' '.join(keys))" 2>/dev/null || echo "")
         fi
     done
 
+    # ---- S14. Alert Email Static Validation ----
+    section "S14. Alert Email Static Validation"
+
+    # Gmail credentials are loaded from Docker secrets files at ./secrets/*.txt
+    for secret in gmail_user gmail_app_password alert_recipient; do
+        SECRET_FILE="$PROJECT_ROOT/secrets/${secret}.txt"
+        if [ -f "$SECRET_FILE" ] && [ -s "$SECRET_FILE" ]; then
+            pass "S33: secrets/${secret}.txt exists and non-empty"
+        elif [ -f "$SECRET_FILE" ]; then
+            fail "S33: secrets/${secret}.txt is empty — email alerts will not send"
+        else
+            warn "S33: secrets/${secret}.txt not found (email alerts disabled)"
+        fi
+    done
+
+    # fast_new_devices dual-flag pattern: alert_emailed (alert-agent consumer) + duckdb_drained (duckdb-mgr consumer)
+    if grep -q "alert_emailed" "$PROJECT_ROOT/duckdb-mgr/main.py" && \
+       grep -q "duckdb_drained" "$PROJECT_ROOT/duckdb-mgr/main.py"; then
+        pass "S34: fast_new_devices dual-flag pattern present (alert_emailed + duckdb_drained) — no race condition between consumers"
+    else
+        fail "S34: fast_new_devices dual-flag pattern missing — alert-agent and duckdb-mgr may race on fast_alerts.db"
+    fi
+
+    # alert_state.db composite PK (anomaly_id, detected_at) — survives DuckDB sequence resets after DB recreation
+    if grep -q "PRIMARY KEY (anomaly_id, detected_at)" "$PROJECT_ROOT/alert-agent/main.py"; then
+        pass "S35: alert_state.db uses composite PK (anomaly_id, detected_at) — protects against email skip after DB reset"
+    else
+        fail "S35: alert_state.db does not use composite PK — DuckDB sequence resets will cause anomalies to be silently skipped"
+    fi
+
+    # nmap SQLite→DuckDB sync function defined in duckdb-mgr
+    if grep -q "def sync_nmap_from_sqlite" "$PROJECT_ROOT/duckdb-mgr/main.py"; then
+        pass "S36: sync_nmap_from_sqlite defined in duckdb-mgr (SQLite→DuckDB nmap sync)"
+    else
+        fail "S36: sync_nmap_from_sqlite missing from duckdb-mgr — on-demand nmap scans won't appear in Grafana"
+    fi
+
+    # ---- S15. LLM Configuration Correctness ----
+    section "S15. LLM Configuration Correctness"
+
+    # MAX_TOOL_ROUNDS must be >= 10 in streamlit — 5 was too low when fallback SQL retries consumed rounds
+    ST_ROUNDS=$(grep "MAX_TOOL_ROUNDS" "$PROJECT_ROOT/streamlit/app.py" 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    if [ "${ST_ROUNDS:-0}" -ge 10 ] 2>/dev/null; then
+        pass "S37: MAX_TOOL_ROUNDS=${ST_ROUNDS} in streamlit/app.py (≥10 required to handle fallback retries)"
+    else
+        fail "S37: MAX_TOOL_ROUNDS=${ST_ROUNDS} in streamlit/app.py is too low — LLM will exhaust rounds before answering when SQL retries occur"
+    fi
+
+    # pytz must be in streamlit/requirements.txt — DuckDB TIMESTAMPTZ columns crash without it
+    if grep -q "pytz" "$PROJECT_ROOT/streamlit/requirements.txt" 2>/dev/null; then
+        pass "S38: pytz in streamlit/requirements.txt (required for DuckDB TIMESTAMPTZ column reads)"
+    else
+        fail "S38: pytz missing from streamlit/requirements.txt — get_devices will crash silently and exhaust all tool rounds"
+    fi
+
+    # pytz also required in alert-agent — same TIMESTAMPTZ issue applies to anomaly reads
+    if grep -q "pytz" "$PROJECT_ROOT/alert-agent/requirements.txt" 2>/dev/null; then
+        pass "S39: pytz in alert-agent/requirements.txt (required for DuckDB TIMESTAMPTZ column reads)"
+    else
+        fail "S39: pytz missing from alert-agent/requirements.txt — anomaly timestamp reads may fail"
+    fi
+
+    # _sync_anomaly_seq must be called at startup in duckdb-mgr — prevents email skip after DB recreation
+    if grep -q "_sync_anomaly_seq" "$PROJECT_ROOT/duckdb-mgr/main.py"; then
+        pass "S40: _sync_anomaly_seq present in duckdb-mgr (guards against email-skip after DuckDB sequence reset)"
+    else
+        fail "S40: _sync_anomaly_seq missing from duckdb-mgr — DB recreation will reset sequence; all new anomalies will be silently skipped by alert-agent"
+    fi
+
 fi # end static tests
 
 # =============================================================================
@@ -547,7 +616,7 @@ if $RUN_RUNTIME; then
         if [ "$NDJSON_COUNT" -gt 0 ]; then
             pass "R11: $NDJSON_COUNT NDJSON staging file(s) in Vector dir"
 
-            FIRST_NDJSON=$(find "$VECTOR_DIR" -name '*.ndjson' -size +0c 2>/dev/null | head -1)
+            FIRST_NDJSON=$(find "$VECTOR_DIR" -name '*.ndjson' -size +0c 2>/dev/null | head -1 || true)
             if [ -n "$FIRST_NDJSON" ]; then
                 if head -1 "$FIRST_NDJSON" | python3 -m json.tool > /dev/null 2>&1; then
                     pass "R12: NDJSON content is valid JSON"
@@ -766,8 +835,9 @@ print(frames[0]['data']['values'][0][0] if frames and frames[0]['data']['values'
         fi
 
         # R25c: Check Grafana plugin error log for known SQL syntax failures
-        GF_SQL_ERR=$(docker logs ids-grafana 2>&1 | grep -c "syntax error at or near" || echo "0")
-        if [ "$GF_SQL_ERR" -gt 0 ]; then
+        GF_SQL_ERR=$(docker logs ids-grafana 2>&1 | grep -c "syntax error at or near" 2>/dev/null || echo "0")
+        GF_SQL_ERR="${GF_SQL_ERR:-0}"
+        if [ "${GF_SQL_ERR}" -gt 0 ] 2>/dev/null; then
             warn "R25c: Grafana plugin logged $GF_SQL_ERR SQL syntax error(s) — check dashboard variable interpolation"
         else
             pass "R25c: No SQL syntax errors in Grafana plugin logs"
@@ -1084,7 +1154,8 @@ print(f'OK:{total}:{embedded}')
     fi
 
     # rag_search_threat_intel callable from streamlit (returns valid JSON)
-    RAG_SEARCH=$(docker exec ids-streamlit python3 -c "
+    # timeout 90: rag_search requires Ollama for embeddings; if Ollama is busy it would hang
+    RAG_SEARCH=$(timeout 90 docker exec ids-streamlit python3 -c "
 import sys, json, os
 sys.path.insert(0, '/app')
 os.environ.setdefault('RAG_DUCKDB_PATH', '/var/log/ids/duckdb/rag.duckdb')
@@ -1096,7 +1167,7 @@ if 'results' in result:
     print(f'OK:{len(result[\"results\"])}')
 else:
     print(f'FAIL:{result}')
-" 2>/dev/null || echo "ERROR")
+" 2>/dev/null || echo "TIMEOUT_OR_ERROR")
     if echo "$RAG_SEARCH" | grep -q "^OK:"; then
         RESULT_CT=$(echo "$RAG_SEARCH" | cut -d: -f2)
         if [ "$RESULT_CT" -gt 0 ] 2>/dev/null; then
@@ -1104,6 +1175,8 @@ else:
         else
             warn "R48: rag_search_threat_intel returned 0 results (indexing may still be in progress)"
         fi
+    elif echo "$RAG_SEARCH" | grep -q "TIMEOUT_OR_ERROR"; then
+        warn "R48: rag_search_threat_intel timed out (Ollama may be busy) or failed"
     else
         warn "R48: rag_search_threat_intel not yet functional: $RAG_SEARCH"
     fi
@@ -1124,6 +1197,343 @@ else:
         pass "R50: Suricata logged 'Rules copied to shared volume for RAG indexing'"
     else
         warn "R50: Rule copy log not yet seen (suricata-update may still be running)"
+    fi
+
+    # ---- R15. Alert Email Delivery ----
+    section "R15. Alert Email Delivery"
+
+    # Gmail secrets must be populated in both alert-agent and streamlit containers
+    for ctr in ids-alert-agent ids-streamlit; do
+        for secret in gmail_user gmail_app_password alert_recipient; do
+            SECRET_VAL=$(docker exec "$ctr" cat /run/secrets/${secret} 2>/dev/null || echo "")
+            if [ -n "$SECRET_VAL" ]; then
+                pass "R51: /run/secrets/${secret} populated in $ctr"
+            else
+                fail "R51: /run/secrets/${secret} empty or missing in $ctr — email alerts will not work"
+            fi
+        done
+    done
+
+    # TCP connectivity to smtp.gmail.com:465 from alert-agent — tests network path without sending email
+    SMTP_REACH=$(docker exec ids-alert-agent python3 -c "
+import socket
+try:
+    s = socket.create_connection(('smtp.gmail.com', 465), timeout=10)
+    s.close()
+    print('OK')
+except Exception as e:
+    print(f'FAIL:{e}')
+" 2>/dev/null || echo "FAIL")
+    if [ "$SMTP_REACH" = "OK" ]; then
+        pass "R52: smtp.gmail.com:465 reachable from alert-agent (TCP connectivity confirmed)"
+    else
+        fail "R52: smtp.gmail.com:465 NOT reachable from alert-agent: $SMTP_REACH"
+    fi
+
+    # Historical email delivery — check alert_state.db for at least one successful send
+    if [ -f "/var/log/ids/duckdb/alert_state.db" ]; then
+        EMAIL_SENT_COUNT=$(docker exec ids-alert-agent python3 -c "
+import sqlite3
+conn = sqlite3.connect('/var/log/ids/duckdb/alert_state.db')
+count = conn.execute('SELECT count(*) FROM processed_anomalies WHERE email_sent=1').fetchone()[0]
+total = conn.execute('SELECT count(*) FROM processed_anomalies').fetchone()[0]
+conn.close()
+print(f'{count}:{total}')
+" 2>/dev/null || echo "ERROR")
+        if [ "$EMAIL_SENT_COUNT" != "ERROR" ]; then
+            SENT=$(echo "$EMAIL_SENT_COUNT" | cut -d: -f1)
+            TOTAL=$(echo "$EMAIL_SENT_COUNT" | cut -d: -f2)
+            if [ "${SENT:-0}" -gt 0 ] 2>/dev/null; then
+                pass "R53: alert_state.db shows $SENT email(s) sent out of $TOTAL processed anomalies"
+            else
+                warn "R53: $TOTAL anomalies processed but 0 emails sent — check Gmail credentials or SMTP connectivity"
+            fi
+        else
+            warn "R53: Could not query alert_state.db for email delivery count"
+        fi
+    else
+        warn "R53: alert_state.db not yet created (no anomalies processed)"
+    fi
+
+    # Log evidence of email activity in alert-agent
+    ALERT_LOGS_FULL=$(docker logs ids-alert-agent 2>&1)
+    if echo "$ALERT_LOGS_FULL" | grep -q "Email sent for anomaly\|fast_alert_loop: email sent"; then
+        EMAIL_LOG_COUNT=$(echo "$ALERT_LOGS_FULL" | grep -c "Email sent for anomaly\|fast_alert_loop: email sent" 2>/dev/null || echo 0)
+        pass "R54: alert-agent logs confirm $EMAIL_LOG_COUNT successful email send(s)"
+    else
+        warn "R54: No email send confirmations in alert-agent logs (no anomalies processed yet, or credentials failed)"
+    fi
+
+    # ---- R16. LLM Response Quality ----
+    section "R16. LLM Response Quality"
+
+    OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3.5:2b}"
+
+    # Pre-check: verify Ollama is idle before running inference tests.
+    # alert-agent and duckdb-mgr both use Ollama; if a request is in flight the
+    # inference tests will time out (not a code defect — just resource contention).
+    OLLAMA_BUSY=$(curl -sf --max-time 5 "http://localhost:11434/api/ps" 2>/dev/null | \
+        python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+models = data.get('models', [])
+busy = [m['name'] for m in models if m.get('size_vram', 0) > 0 or m.get('expires_at')]
+print('BUSY:' + ','.join(busy) if busy else 'IDLE')
+" 2>/dev/null || echo "UNKNOWN")
+
+    if echo "$OLLAMA_BUSY" | grep -q "^BUSY:"; then
+        BUSY_MODEL=$(echo "$OLLAMA_BUSY" | sed 's/^BUSY://')
+        warn "R56: Skipping inference test — Ollama is currently processing: $BUSY_MODEL (rerun when idle)"
+        warn "R57: Skipping tool-calling test — Ollama busy"
+        warn "R58: Skipping end-to-end pipeline test — Ollama busy"
+    else
+        # R56: Basic sanity — model returns a coherent answer to a trivial prompt
+        LLM_BASIC=$(curl -sf --max-time 300 \
+            -X POST "http://localhost:11434/api/chat" \
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"${OLLAMA_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2? Reply with just the number.\"}],\"stream\":false,\"options\":{\"num_ctx\":512,\"num_thread\":4}}" \
+            2>/dev/null | python3 -c "
+import sys, json
+r = json.load(sys.stdin)
+content = r.get('message', {}).get('content', '').strip()
+print(content)" 2>/dev/null || echo "")
+        if echo "$LLM_BASIC" | grep -q "4"; then
+            pass "R56: Ollama correctly answers '2+2=4' (model is responsive and coherent)"
+        elif [ -n "$LLM_BASIC" ]; then
+            warn "R56: Ollama response to '2+2': '${LLM_BASIC:0:80}' — model is responding but answer unexpected"
+        else
+            fail "R56: Ollama returned empty response — model may be misconfigured or API is broken"
+        fi
+
+        # R57: Tool-calling — model invokes the correct tool when explicitly asked
+        LLM_TOOL=$(timeout 300 docker exec ids-streamlit python3 -c "
+import json, os
+import ollama
+client = ollama.Client(host=os.environ.get('OLLAMA_HOST', 'http://localhost:11434'))
+model = os.environ.get('OLLAMA_MODEL', 'qwen3.5:2b')
+tool_def = [{
+    'type': 'function',
+    'function': {
+        'name': 'get_event_stats',
+        'description': 'Get event counts by source tool and log type from the IDS database',
+        'parameters': {'type': 'object', 'properties': {}}
+    }
+}]
+resp = client.chat(
+    model=model,
+    messages=[{'role': 'user', 'content': 'Call get_event_stats right now to retrieve event counts from the IDS database.'}],
+    tools=tool_def,
+    options={'num_ctx': 1024, 'num_thread': 4}
+)
+msg = resp.message
+if msg.tool_calls:
+    print('TOOL:' + msg.tool_calls[0].function.name)
+elif msg.content:
+    print('TEXT:' + msg.content[:100])
+else:
+    print('EMPTY')
+" 2>/dev/null || echo "TIMEOUT")
+        if echo "$LLM_TOOL" | grep -q "^TOOL:get_event_stats"; then
+            pass "R57: Ollama correctly invokes get_event_stats tool when asked — tool-calling pipeline is operational"
+        elif echo "$LLM_TOOL" | grep -q "^TOOL:"; then
+            TOOL_NAME=$(echo "$LLM_TOOL" | sed 's/^TOOL://')
+            warn "R57: Ollama called '$TOOL_NAME' instead of get_event_stats — tool routing may be unreliable"
+        elif echo "$LLM_TOOL" | grep -q "^TEXT:"; then
+            warn "R57: Ollama responded with text instead of tool call: ${LLM_TOOL:5:100} — model may not support tool-calling for this prompt"
+        elif echo "$LLM_TOOL" | grep -q "^TIMEOUT"; then
+            warn "R57: Tool-calling test timed out (300s) — Ollama may have become busy mid-test"
+        else
+            fail "R57: Ollama tool-calling test failed unexpectedly: $LLM_TOOL"
+        fi
+
+        # R58: End-to-end pipeline — real tool output fed to LLM produces coherent summary
+        LLM_PIPELINE=$(timeout 300 docker exec ids-streamlit python3 -c "
+import json, os, sys
+sys.path.insert(0, '/app')
+import ollama
+from tools import get_event_stats
+
+client = ollama.Client(host=os.environ.get('OLLAMA_HOST', 'http://localhost:11434'))
+model = os.environ.get('OLLAMA_MODEL', 'qwen3.5:2b')
+
+stats_json = get_event_stats()
+stats = json.loads(stats_json)
+
+if 'error' in stats or stats.get('row_count', 0) == 0:
+    print('SKIP:no data')
+    sys.exit(0)
+
+messages = [
+    {'role': 'user', 'content': 'Here are IDS event statistics from the database:'},
+    {'role': 'tool', 'content': stats_json},
+    {'role': 'user', 'content': 'In one sentence, tell me the total number of events and which source tools produced them.'}
+]
+resp = client.chat(
+    model=model,
+    messages=messages,
+    options={'num_ctx': 2048, 'num_thread': 4}
+)
+content = (resp.message.content or '').strip()
+print(f'LEN:{len(content)}:{content[:200]}')
+" 2>/dev/null || echo "TIMEOUT")
+        if echo "$LLM_PIPELINE" | grep -q "^SKIP:"; then
+            warn "R58: Skipping end-to-end pipeline test — no event data in DuckDB yet"
+        elif echo "$LLM_PIPELINE" | grep -q "^LEN:"; then
+            RESP_LEN=$(echo "$LLM_PIPELINE" | cut -d: -f2)
+            RESP_TEXT=$(echo "$LLM_PIPELINE" | cut -d: -f3-)
+            if [ "${RESP_LEN:-0}" -ge 40 ] 2>/dev/null; then
+                pass "R58: LLM produces coherent summary from tool output (${RESP_LEN} chars): ${RESP_TEXT:0:90}..."
+            else
+                warn "R58: LLM response is suspiciously short (${RESP_LEN} chars): '$RESP_TEXT'"
+            fi
+        elif echo "$LLM_PIPELINE" | grep -q "^TIMEOUT"; then
+            warn "R58: End-to-end pipeline test timed out (300s) — Ollama may have become busy mid-test"
+        else
+            fail "R58: End-to-end LLM pipeline test failed unexpectedly: $LLM_PIPELINE"
+        fi
+    fi
+
+    # ---- R17. Missed Service Interfaces ----
+    section "R17. Missed Service Interfaces"
+
+    # fast_alerts.db schema — both consumer flags must be present (dual-consumer, no race condition)
+    if [ -f "/var/log/ids/duckdb/fast_alerts.db" ]; then
+        FA_SCHEMA=$(docker exec ids-alert-agent python3 -c "
+import sqlite3
+conn = sqlite3.connect('/var/log/ids/duckdb/fast_alerts.db')
+cols = [r[1] for r in conn.execute('PRAGMA table_info(fast_new_devices)').fetchall()]
+conn.close()
+print(':'.join(cols))
+" 2>/dev/null || echo "ERROR")
+        if echo "$FA_SCHEMA" | grep -q "alert_emailed" && echo "$FA_SCHEMA" | grep -q "duckdb_drained"; then
+            pass "R59: fast_alerts.db has both consumer flags (alert_emailed + duckdb_drained) — independent consumer paths confirmed"
+        elif [ "$FA_SCHEMA" = "ERROR" ]; then
+            fail "R59: Could not read fast_alerts.db schema"
+        else
+            fail "R59: fast_alerts.db schema missing flags (got: $FA_SCHEMA) — consumers may interfere with each other"
+        fi
+    else
+        warn "R59: fast_alerts.db not yet created (IPWatcher not started or no new private IPs seen)"
+    fi
+
+    # alert_state.db composite PK — SQLite PRAGMA confirms (anomaly_id, detected_at) as PK
+    if [ -f "/var/log/ids/duckdb/alert_state.db" ]; then
+        STATE_PK=$(docker exec ids-alert-agent python3 -c "
+import sqlite3
+conn = sqlite3.connect('/var/log/ids/duckdb/alert_state.db')
+# pk column in PRAGMA table_info is 1-based position in PK; 0 means not part of PK
+pk_cols = sorted([r[1] for r in conn.execute('PRAGMA table_info(processed_anomalies)').fetchall() if r[5] > 0])
+conn.close()
+print(':'.join(pk_cols))
+" 2>/dev/null || echo "ERROR")
+        if echo "$STATE_PK" | grep -q "anomaly_id" && echo "$STATE_PK" | grep -q "detected_at"; then
+            pass "R60: alert_state.db composite PK (anomaly_id + detected_at) confirmed — survives DuckDB sequence resets"
+        elif [ "$STATE_PK" = "ERROR" ]; then
+            warn "R60: Could not verify alert_state.db PK schema"
+        else
+            fail "R60: alert_state.db PK is '$STATE_PK' — expected composite (anomaly_id, detected_at); email dedup will break after DB reset"
+        fi
+    else
+        warn "R60: alert_state.db not yet created — will be verified after first anomaly poll"
+    fi
+
+    # anomaly_id_seq sync logged at startup — critical guard against email-skip-after-DB-reset bug
+    if echo "$DUCKDB_LOGS" | grep -q "Synced anomaly_id_seq\|anomaly_id_seq.*advanced"; then
+        SYNC_LINE=$(echo "$DUCKDB_LOGS" | grep "Synced anomaly_id_seq\|anomaly_id_seq.*advanced" | tail -1)
+        pass "R61: anomaly_id_seq startup sync ran: $SYNC_LINE"
+    else
+        warn "R61: anomaly_id_seq sync not logged — OK if alert_state.db was empty at startup (nothing to sync)"
+    fi
+
+    # nmap SQLite→DuckDB sync — after a scan is saved to SQLite, duckdb-mgr must copy it to DuckDB
+    SQLITE_NMAP=$(docker exec ids-streamlit python3 -c "
+import sqlite3
+conn = sqlite3.connect('/var/log/ids/duckdb/nmap_results.db')
+print(conn.execute('SELECT count(*) FROM nmap_results').fetchone()[0])
+conn.close()
+" 2>/dev/null || echo "0")
+    DUCKDB_NMAP=$(docker exec ids-streamlit python3 -c "
+import duckdb
+db = duckdb.connect('$DUCKDB_READONLY', read_only=True)
+print(db.execute(\"SELECT count(*) FROM nmap_scans WHERE scan_type != 'scheduled_service'\").fetchone()[0])
+db.close()
+" 2>/dev/null || echo "0")
+    if [ "$SQLITE_NMAP" = "0" ] && [ "$DUCKDB_NMAP" = "0" ]; then
+        warn "R62: No nmap scans in either SQLite or DuckDB yet (run a scan via chat to test sync)"
+    elif [ "${DUCKDB_NMAP:-0}" -ge "${SQLITE_NMAP:-0}" ] 2>/dev/null; then
+        pass "R62: nmap SQLite→DuckDB sync confirmed (SQLite=$SQLITE_NMAP rows, DuckDB=$DUCKDB_NMAP rows)"
+    else
+        warn "R62: nmap sync lag detected (SQLite=$SQLITE_NMAP rows, DuckDB=$DUCKDB_NMAP rows) — duckdb-mgr may not have cycled yet"
+    fi
+
+    # whitelist.db → Streamlit check_whitelist interface
+    WLIST_CHECK=$(docker exec ids-streamlit python3 -c "
+import sys, json
+sys.path.insert(0, '/app')
+from tools import check_whitelist
+result = json.loads(check_whitelist('list'))
+if 'whitelist' in result:
+    print(f'OK:{result.get(\"count\",0)}')
+else:
+    print(f'FAIL:{result}')
+" 2>/dev/null || echo "FAIL")
+    if echo "$WLIST_CHECK" | grep -q "^OK:"; then
+        WL_COUNT=$(echo "$WLIST_CHECK" | sed 's/OK://')
+        pass "R63: whitelist.db ↔ Streamlit interface operational ($WL_COUNT entries)"
+    else
+        fail "R63: whitelist.db interface broken: $WLIST_CHECK"
+    fi
+
+    # Vector NDJSON → DuckDB interface covers both source tools
+    VECTOR_SOURCES=$(find "${LOG_DIR}/vector" -name '*.ndjson' -size +0c 2>/dev/null | head -5 | \
+        xargs -I{} sh -c "head -1 '{}' 2>/dev/null" | python3 -c "
+import sys, json
+sources = set()
+for line in sys.stdin:
+    try:
+        src = json.loads(line).get('source_tool', '')
+        if src:
+            sources.add(src)
+    except Exception:
+        pass
+print(':'.join(sorted(sources)))" 2>/dev/null || echo "")
+    for tool_src in suricata zeek; do
+        if echo "$VECTOR_SOURCES" | grep -q "$tool_src"; then
+            pass "R64: Vector NDJSON staging contains $tool_src events"
+        else
+            warn "R64: No $tool_src events in Vector NDJSON staging files (interface may be broken or need more time)"
+        fi
+    done
+
+    # alert-agent main polling loop is running (not just started)
+    if echo "$ALERT_LOGS_FULL" | grep -q "Found.*unprocessed anomaly\|No new anomalies\|Starting alert-agent"; then
+        pass "R65: alert-agent main polling loop is running"
+    else
+        warn "R65: alert-agent polling loop status unclear — check container logs"
+    fi
+
+    # fast_alert_loop daemon thread started in alert-agent
+    if echo "$ALERT_LOGS_FULL" | grep -q "fast_alert_loop: started"; then
+        pass "R66: fast_alert_loop daemon thread started in alert-agent"
+    else
+        warn "R66: fast_alert_loop not yet confirmed started — check alert-agent startup logs"
+    fi
+
+    # IPWatcher thread started in duckdb-mgr (near-real-time new-device detection)
+    if echo "$DUCKDB_LOGS" | grep -q "IPWatcher: started"; then
+        pass "R67: IPWatcher thread started in duckdb-mgr (near-real-time new-device detection active)"
+    else
+        warn "R67: IPWatcher not yet confirmed started in duckdb-mgr — new devices may have 5-7min detection delay"
+    fi
+
+    # duckdb-mgr drain_fast_alerts and nmap sync cycles ran
+    if echo "$DUCKDB_LOGS" | grep -q "Synced.*nmap result"; then
+        SYNC_CT=$(echo "$DUCKDB_LOGS" | grep -c "Synced.*nmap result" || echo 0)
+        pass "R68: duckdb-mgr nmap SQLite sync ran ($SYNC_CT time(s) logged)"
+    elif echo "$DUCKDB_LOGS" | grep -q "drain_fast_alerts\|Drained"; then
+        pass "R68: duckdb-mgr fast-alert drain running"
+    else
+        warn "R68: No nmap sync or fast-alert drain logged yet in duckdb-mgr (normal if no scans or fast alerts occurred)"
     fi
 
 fi # end runtime tests
