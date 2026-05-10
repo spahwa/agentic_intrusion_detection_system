@@ -67,16 +67,50 @@ cmd_start() {
     cmd_status
 }
 
+_stop_ordered() {
+    # Stop services in dependency order, then remove containers and networks.
+    # Volumes are never touched.
+    #
+    # Order rationale:
+    #   1. alert-agent, streamlit  — LLM consumers; frees Ollama, closes SQLite writers
+    #                                (alert_state.db, nmap_results.db, whitelist.db)
+    #   2. grafana                 — snapshot reader only; safe any time
+    #   3. duckdb-mgr              — sole DuckDB writer; 60s timeout covers compaction
+    #                                (Parquet export/reimport must complete atomically)
+    #   4. vector                  — log pipeline; stops NDJSON staging
+    #   5. suricata, zeek          — packet capturers last; data already staged by vector
+    #
+    # Each step uses || true so a service that is already stopped does not abort the script.
+
+    echo -e "  ${CYAN}[1/5] LLM consumers   : alert-agent, streamlit${NC}"
+    docker compose stop --timeout 15 alert-agent streamlit 2>/dev/null || true
+
+    echo -e "  ${CYAN}[2/5] Dashboard       : grafana${NC}"
+    docker compose stop --timeout 10 grafana 2>/dev/null || true
+
+    echo -e "  ${CYAN}[3/5] DB writer       : duckdb-mgr${NC}"
+    docker compose stop --timeout 60 duckdb-mgr 2>/dev/null || true
+
+    echo -e "  ${CYAN}[4/5] Log pipeline    : vector${NC}"
+    docker compose stop --timeout 10 vector 2>/dev/null || true
+
+    echo -e "  ${CYAN}[5/5] Packet capturers: suricata, zeek${NC}"
+    docker compose stop --timeout 15 suricata zeek 2>/dev/null || true
+}
+
 cmd_stop() {
-    echo -e "${CYAN}Stopping Agentic IDS stack...${NC}"
-    docker compose down
-    echo -e "${GREEN}All services stopped. Data preserved in log directory.${NC}"
+    echo -e "${CYAN}Stopping Agentic IDS stack (safe sequence)...${NC}"
+    _stop_ordered
+    # Remove stopped containers and networks; volumes preserved (no -v)
+    docker compose down 2>/dev/null || true
+    echo -e "${GREEN}All services stopped safely. Data preserved in log directory.${NC}"
 }
 
 cmd_restart() {
     echo -e "${CYAN}Restarting Agentic IDS stack...${NC}"
     ensure_secrets
-    docker compose down
+    _stop_ordered
+    docker compose down 2>/dev/null || true
     docker compose up -d
     echo -e "${GREEN}All services restarted.${NC}"
     echo
