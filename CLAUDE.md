@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Ollama 0.17.7 (installed on host)
 - Network interfaces: `enp1s0f0` (wired), `wlp2s0` (wireless) — configurable via `.env`
 - Hostname: `ethereal`
-- GPU: AMD Radeon 780M iGPU (RDNA3/gfx1103) — Vulkan inference via Mesa RADV, ~18 tok/s decode
+- GPU: AMD Radeon 780M iGPU (RDNA3/gfx1103) — Vulkan inference via Mesa RADV, ~25-27 tok/s decode (short prompts), ~24 tok/s (long prompts)
 - Ollama systemd override: `CPUQuota=600%` + `Environment="OLLAMA_VULKAN=1"` in `/etc/systemd/system/ollama.service.d/override.conf`
 
 ## Tech Stack
@@ -146,7 +146,7 @@ MAX_DB_SIZE_MB=4000            # DuckDB max file size before pausing ingestion
 MAX_EVE_SIZE_MB=200            # Suricata eve.json rotation threshold in MB
 GRAFANA_TAG=11.6.0-ubuntu      # Grafana Docker image tag (Ubuntu for DuckDB plugin)
 GRAFANA_PORT=3000              # Grafana web UI port
-OLLAMA_MODEL=qwen3.5:2b        # Ollama model for chat (3.5-2B: better than 2.5-3B, 262K ctx)
+OLLAMA_MODEL=qwen3.5-ids:2b    # Custom model: qwen3.5:2b base + num_ctx=32768 (see Modelfile)
 STREAMLIT_PORT=8501            # Streamlit chat UI port
 APPRISE_URLS=                  # Apprise notification URLs (comma-separated)
 GMAIL_USER=your-email@gmail.com  # Gmail for alert-agent email notifications
@@ -497,6 +497,47 @@ ollama ps
 | CPUQuota=600% + OLLAMA_VULKAN=1 | ~18.0 tok/s |
 
 If `ollama ps` shows `100% CPU` after enabling Vulkan, the model doesn't fully fit in VRAM — this is expected for the iGPU (shared RAM); Ollama still offloads as many layers as possible.
+
+### Custom Model: qwen3.5-ids:2b (Context Window)
+
+The default `qwen3.5:2b` Ollama model uses a 4096-token context window. For IDS chat sessions with multiple tool calls, the system prompt + tool results can exceed 4096 tokens mid-investigation, causing the model to forget earlier results. A custom model with 32768 context is used instead.
+
+**Creating the custom model** (already done — `Modelfile` checked into repo root):
+```bash
+ollama create qwen3.5-ids:2b -f Modelfile
+```
+
+**Modelfile** (`/home/popoye/claude_ids/Modelfile`):
+```
+FROM qwen3.5:2b
+PARAMETER num_ctx 32768
+PARAMETER presence_penalty 1.5
+PARAMETER temperature 1
+PARAMETER top_k 20
+PARAMETER top_p 0.95
+```
+
+**Benchmark results** (measured 2026-05-15, Radeon 780M + Vulkan):
+| Metric | 4096 ctx | 32768 ctx | Delta |
+|--------|----------|-----------|-------|
+| Generate rate — short prompt | 27.0 tok/s | 25.5 tok/s | -1.5 |
+| Generate rate — long prompt (1519 tokens) | 24.2 tok/s | 24.2 tok/s | 0.0 |
+| Total time — short prompt | 10.3s | 11.3s | +1.0s |
+| Total time — long prompt | 33.4s | 34.3s | +0.9s |
+| Response quality | identical | identical | — |
+
+**Key findings:**
+- 32768 ctx costs ~1.5 tok/s (~6%) on short prompts; zero difference above ~1500 prompt tokens
+- Overhead is KV cache allocation at load time, not per-token generation cost
+- Response quality is identical when context fits in both windows
+- Quality diverges only when conversation exceeds 4096 tokens — at that point 4096 ctx truncates earlier tool results, 32768 retains full investigation history
+- `think=False` must be set per-request — without it, qwen3.5 thinking tokens consume the entire output budget before producing an answer
+
+**VRAM / GTT memory impact (Radeon 780M iGPU):**
+- Dedicated VRAM (BIOS-allocated): **1 GB** — model does not fit; spills to GTT
+- GTT (system RAM mapped to GPU): **15.4 GB** total, 4 GB used at idle by model
+- At full 32768-token context: KV cache adds ~3.6 GB → total GTT ~7.6 GB (within limit)
+- Raising BIOS UMA Frame Buffer Size from 1 GB → 4 GB would keep model in fast VRAM and improve throughput
 
 ## DuckDB Compaction Notes
 
