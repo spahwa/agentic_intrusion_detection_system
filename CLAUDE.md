@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Ollama 0.17.7 (installed on host)
 - Network interfaces: `enp1s0f0` (wired), `wlp2s0` (wireless) — configurable via `.env`
 - Hostname: `ethereal`
-- GPU: AMD Radeon 780M iGPU (RDNA3/gfx1103) — Vulkan inference via Mesa RADV, ~25-27 tok/s decode (short prompts), ~24 tok/s (long prompts)
+- GPU: AMD Radeon 780M iGPU (RDNA3/gfx1103) — Vulkan inference via Mesa RADV, ~27.7 tok/s decode (short prompts), ~27.5 tok/s (long prompts); BIOS UMA Frame Buffer = 4 GB → model runs 100% GPU
 - Ollama systemd override: `CPUQuota=600%` + `Environment="OLLAMA_VULKAN=1"` in `/etc/systemd/system/ollama.service.d/override.conf`
 
 ## Tech Stack
@@ -517,27 +517,27 @@ PARAMETER top_k 20
 PARAMETER top_p 0.95
 ```
 
-**Benchmark results** (measured 2026-05-15, Radeon 780M + Vulkan):
-| Metric | 4096 ctx | 32768 ctx | Delta |
-|--------|----------|-----------|-------|
-| Generate rate — short prompt | 27.0 tok/s | 25.5 tok/s | -1.5 |
-| Generate rate — long prompt (1519 tokens) | 24.2 tok/s | 24.2 tok/s | 0.0 |
-| Total time — short prompt | 10.3s | 11.3s | +1.0s |
-| Total time — long prompt | 33.4s | 34.3s | +0.9s |
-| Response quality | identical | identical | — |
+**Benchmark results** (updated 2026-05-15, Radeon 780M + Vulkan + 4 GB BIOS VRAM):
+| Metric | 1 GB VRAM (GTT spill) | **4 GB VRAM (100% GPU)** | Delta |
+|--------|----------------------|--------------------------|-------|
+| Generate rate — short prompt | ~25.5 tok/s | **27.7 tok/s** | +2.2 (+9%) |
+| Generate rate — long prompt (~700 tok) | ~24.2 tok/s | **27.5 tok/s** | +3.3 (+14%) |
+| Prompt ingestion — warm KV cache | n/a | **~2200 tok/s** | — |
+| `ollama ps` PROCESSOR | partial GPU+GTT | **100% GPU** | ✓ |
+| Model size in memory | ~4 GB GTT | **4.8 GB on-chip** | — |
 
 **Key findings:**
 - 32768 ctx costs ~1.5 tok/s (~6%) on short prompts; zero difference above ~1500 prompt tokens
 - Overhead is KV cache allocation at load time, not per-token generation cost
-- Response quality is identical when context fits in both windows
-- Quality diverges only when conversation exceeds 4096 tokens — at that point 4096 ctx truncates earlier tool results, 32768 retains full investigation history
+- Moving from 1 GB → 4 GB BIOS UMA Frame Buffer gained ~9–14% generate throughput
+- Prompt ingestion runs at ~2200 tok/s (warm KV cache) — IDS system prompt (~700 tokens) ingests in <1s
 - `think=False` must be set per-request — without it, qwen3.5 thinking tokens consume the entire output budget before producing an answer
 
 **VRAM / GTT memory impact (Radeon 780M iGPU):**
-- Dedicated VRAM (BIOS-allocated): **1 GB** — model does not fit; spills to GTT
-- GTT (system RAM mapped to GPU): **15.4 GB** total, 4 GB used at idle by model
-- At full 32768-token context: KV cache adds ~3.6 GB → total GTT ~7.6 GB (within limit)
-- Raising BIOS UMA Frame Buffer Size from 1 GB → 4 GB would keep model in fast VRAM and improve throughput
+- Dedicated VRAM (BIOS-allocated): **4 GB** (UMA Frame Buffer raised from 1 GB → 4 GB)
+- Model footprint: **4.8 GB** — fits on-chip (`ollama ps` shows `100% GPU`, no GTT spill)
+- At full 32768-token context: KV cache headroom remains within GTT if needed; typical sessions fit in 4 GB
+- `mem_info_vram_total=4096 MB`, 258 MB used at idle (verified 2026-05-15)
 
 ## DuckDB Compaction Notes
 

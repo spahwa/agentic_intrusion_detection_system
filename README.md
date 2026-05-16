@@ -42,7 +42,7 @@ A fully local, AI-powered Intrusion Detection System. Captures live network traf
          :3000             +-----------+    FAST: fast_alerts.db (2s)
                             :8501         RICH: Ollama LLM + Gmail
                            Ollama
-                         (qwen2.5:3b)
+                        (qwen3.5-ids:2b)
 
         All 7 services have Docker healthchecks (auto-restart on failure)
 ```
@@ -78,6 +78,7 @@ A fully local, AI-powered Intrusion Detection System. Captures live network traf
 - [Testing](#testing)
 - [Generating Test Traffic](#generating-test-traffic)
 - [Troubleshooting](#troubleshooting)
+- [Ollama Performance Tuning History](#ollama-performance-tuning-history)
 - [Project Status](#project-status)
 
 ---
@@ -430,15 +431,16 @@ The Alert Agent has two independent alerting paths running simultaneously:
 | **Installed on** | Host machine (not in Docker) |
 | **Port** | `11434` (localhost only) |
 | **Model** | `qwen3.5:2b` (default) |
-| **GPU** | Radeon 780M via Vulkan (`OLLAMA_VULKAN=1`) — ~18 tok/s decode |
+| **GPU** | Radeon 780M via Vulkan (`OLLAMA_VULKAN=1`) — ~27.7 tok/s decode (4 GB BIOS VRAM, 100% GPU) |
 
 Ollama is the local LLM runtime. It serves the Qwen3.5 model that powers both the Streamlit chat and the Alert Agent.
 
 **Why host-installed?** Ollama needs direct GPU/CPU access for inference. Running it inside Docker adds complexity (GPU passthrough) with no benefit. Both Streamlit and Alert Agent containers use `network_mode: host` to reach it on `localhost:11434`.
 
 **Model choice:**
-- `qwen3.5:2b` — Default. ~18 tok/s on Radeon 780M GPU (~12s for 200-token response), 2.7GB RAM, 262K context, better than qwen2.5:3b. Fits on Raspberry Pi 5 (CPU-only there).
-- `qwen2.5:3b` — Fallback. ~10 tok/s CPU-only, 2GB RAM.
+- `qwen3.5-ids:2b` — Active model (custom, 32768-token context window). ~27.7 tok/s on Radeon 780M GPU (100% GPU, 4 GB BIOS VRAM), 4.8 GB loaded, 262K base context. Runs 100% on-chip with 4 GB BIOS UMA Frame Buffer.
+- `qwen3.5:2b` — Base model (4096-token context). Same weights; use `qwen3.5-ids:2b` instead to avoid context truncation mid-investigation.
+- `qwen2.5:3b` — Fallback. ~10 tok/s CPU-only, 2 GB RAM. Still valid on CPU-only hardware.
 
 **GPU acceleration (Radeon 780M):**
 Ollama uses the integrated Radeon 780M via Vulkan (enabled with `OLLAMA_VULKAN=1` in the systemd service override). No ROCm installation needed — Mesa RADV provides the Vulkan driver. Confirmed working on Ubuntu 24.04 with `ollama ps` showing `100% GPU`.
@@ -656,7 +658,7 @@ results     JSON                     -- Full scan results (hosts, ports, service
 | Grafana | `ids-grafana` | bridge | Go daemon | `grafana/grafana:11.6.0-ubuntu` | DuckDB plugin, 9 provisioned dashboards |
 | Streamlit | `ids-streamlit` | host | Python 3.12 | `python:3.12-slim` + nmap + curl | Ollama tool-calling, 12 LLM tools, on-demand nmap |
 | Alert Agent | `ids-alert-agent` | host | Python 3.12 | `python:3.12-slim` | Ollama tool-calling, anomaly polling, Gmail SMTP |
-| Ollama | _(host process)_ | host | Go daemon | _(native install)_ | Qwen2.5-3B/7B inference, tool/function calling |
+| Ollama | _(host process)_ | host | Go daemon | _(native install)_ | Qwen3.5-2B inference via Vulkan GPU, tool/function calling |
 
 ### Interfaces & Ports
 
@@ -1321,6 +1323,165 @@ bash scripts/verify_phase2.sh
 | OUI/GeoIP download fails | IEEE/DB-IP servers may rate-limit | Will retry next cycle (weekly/monthly). Non-blocking — ingestion continues |
 | Fast alert email not sent | `docker compose logs alert-agent --tail=30` — look for `fast_alert_loop` lines | Verify Gmail App Password secrets; fast_alerts.db must exist at `/var/log/ids/duckdb/fast_alerts.db` |
 | Dual/virbr interface logs missing | `ls /var/log/ids/suricata-wifi/` etc. | Run with correct profile: `docker compose --profile dual up -d`; check `NETWORK_INTERFACE_2/3` in `.env` |
+
+---
+
+## Ollama Performance Tuning History
+
+This section documents the progression of LLM inference performance on the host machine (AMD Radeon 780M iGPU, x86_64, Ubuntu 24.04). Each step was a deliberate tuning decision — recorded here so the reasoning is traceable.
+
+### Benchmark methodology
+
+Ollama's `/api/generate` endpoint returns exact token counts and nanosecond durations in the JSON response. These are used directly — no wall-clock guessing or sampling.
+
+**Fields used:**
+
+| Field | Meaning |
+|-------|---------|
+| `eval_count` | Number of tokens generated in the response |
+| `eval_duration` | Time spent generating those tokens (nanoseconds) |
+| `prompt_eval_count` | Number of tokens in the prompt |
+| `prompt_eval_duration` | Time spent ingesting the prompt (nanoseconds) |
+| `total_duration` | End-to-end wall time including model load (nanoseconds) |
+
+**Formula:**
+
+```
+generate tok/s  = eval_count        / (eval_duration        / 1_000_000_000)
+prompt tok/s    = prompt_eval_count / (prompt_eval_duration  / 1_000_000_000)
+```
+
+**How to run the benchmark:**
+
+```bash
+# Short prompt — measures steady-state generate throughput
+for i in 1 2 3; do
+  RESULT=$(curl -s http://localhost:11434/api/generate \
+    -d '{"model":"qwen3.5-ids:2b","prompt":"What is the capital of France?",
+         "stream":false,"options":{"temperature":0,"num_predict":80}}')
+  python3 -c "
+import json, sys
+d = json.loads('''$RESULT''')
+gen   = d['eval_count']        / (d['eval_duration']        / 1e9)
+ingest = d['prompt_eval_count'] / (d['prompt_eval_duration'] / 1e9)
+total  = d['total_duration'] / 1e9
+print(f'Run $i: generate={gen:.1f} tok/s ({d[\"eval_count\"]} tokens, {total:.1f}s total) | prompt ingestion={ingest:.1f} tok/s ({d[\"prompt_eval_count\"]} tokens)')
+"
+done
+
+# Long prompt — measures throughput under realistic IDS system-prompt load (~700 tokens)
+# Replace LONG_PROMPT with the contents of streamlit/system_prompt.py truncated to ~3000 chars
+```
+
+**What each run measures:**
+
+- **Run 1** includes model load time (cold start) — `total_duration` will be several seconds higher than runs 2–3. Use runs 2–3 for steady-state numbers.
+- **Short prompt** (~17 tokens): tests generate throughput with a minimal KV cache. Sensitive to VRAM allocation — if the model spills to GTT, this is where it shows.
+- **Long prompt** (~700 tokens, using the IDS system prompt): tests prompt ingestion speed and generate throughput under realistic load. Warm KV cache (run 2+) shows the ingestion ceiling.
+
+**Interpreting `ollama ps`:**
+
+```bash
+ollama ps
+# NAME              SIZE    PROCESSOR    CONTEXT
+# qwen3.5-ids:2b    4.8GB   100% GPU     32768
+```
+
+- `100% GPU` — model fully on native VRAM or GTT, Vulkan inference active
+- `100% CPU` — Vulkan not enabled or GPU driver missing
+- `XX% GPU / YY% CPU` — model partially offloaded (insufficient VRAM); slower than full GPU
+
+### Stage 1 — CPU-only inference (initial release)
+
+The stack launched with Ollama running on CPU only. `qwen2.5:3b` was the initial model choice.
+
+| Config | Tokens/s | Notes |
+|--------|----------|-------|
+| `CPUQuota=400%`, CPU-only | ~1.1 tok/s | Too slow for interactive use |
+| `CPUQuota=600%`, CPU-only | ~10.3 tok/s | Usable but ~20s/response |
+
+`OLLAMA_NUM_THREADS` was tested and found to be **ignored** — Ollama derives its own thread count from `CPUQuota`. Setting it explicitly has no effect; do not set it.
+
+### Stage 2 — GPU inference via Vulkan (first GPU switch)
+
+The Radeon 780M (gfx1103/RDNA3) is not in AMD's official ROCm support matrix, but Vulkan inference works via Mesa RADV on Ubuntu 24.04 with no ROCm installation. Enabled by adding `Environment="OLLAMA_VULKAN=1"` to the Ollama systemd override.
+
+```ini
+# /etc/systemd/system/ollama.service.d/override.conf
+[Service]
+CPUQuota=600%
+Environment="OLLAMA_VULKAN=1"
+```
+
+| Config | Tokens/s | Notes |
+|--------|----------|-------|
+| `CPUQuota=600%` + Vulkan | ~18.0 tok/s | GPU active; `ollama ps` shows partial GPU+GTT |
+
+At this stage BIOS UMA Frame Buffer was 1 GB, so the model (~2.7 GB) spilled into GTT (system RAM mapped to GPU). Performance improved significantly but the model was not fully on-chip.
+
+Verify GPU is active: `ollama ps` — look for `100% GPU` in the PROCESSOR column. If it shows `100% CPU`, Vulkan is not enabled or the driver is missing (`sudo apt install mesa-vulkan-drivers`).
+
+### Stage 3 — Context window tuning (4096 → 32768)
+
+The default `qwen3.5:2b` model uses a 4096-token context window. IDS chat sessions with multiple tool calls — system prompt (~700 tokens) + several tool results — routinely exceed 4096 tokens mid-investigation, causing the model to silently truncate earlier results.
+
+A custom model `qwen3.5-ids:2b` was created with `num_ctx = 32768`:
+
+```
+# Modelfile (checked into repo root)
+FROM qwen3.5:2b
+PARAMETER num_ctx 32768
+PARAMETER presence_penalty 1.5
+PARAMETER temperature 1
+PARAMETER top_k 20
+PARAMETER top_p 0.95
+```
+
+```bash
+ollama create qwen3.5-ids:2b -f Modelfile
+```
+
+**Cost of the larger context window:**
+
+| Metric | 4096 ctx | 32768 ctx | Delta |
+|--------|----------|-----------|-------|
+| Generate rate — short prompt | ~27.0 tok/s | ~25.5 tok/s | −1.5 (−6%) |
+| Generate rate — long prompt (>1500 tok) | ~24.2 tok/s | ~24.2 tok/s | 0 |
+
+The ~6% overhead on short prompts is KV cache allocation at load time, not per-token cost. Above ~1500 prompt tokens the difference disappears entirely. The quality benefit (no mid-session truncation) outweighs the marginal overhead.
+
+**Note:** `think=False` must be set per-request for qwen3.5. Without it, the model spends its entire output budget on thinking tokens and produces no answer.
+
+### Stage 4 — BIOS VRAM increase (1 GB → 4 GB UMA Frame Buffer)
+
+The BIOS UMA Frame Buffer Size was raised from 1 GB to 4 GB in the firmware settings. This is the native VRAM allocation for the iGPU — the amount of system RAM the GPU can use as dedicated on-chip memory without going through the slower GTT (Graphics Translation Table / system RAM mapped to GPU) path.
+
+With 4 GB native VRAM, the `qwen3.5-ids:2b` model (4.8 GB loaded) fits on-chip. `ollama ps` now shows `100% GPU` with no GTT spill.
+
+**Benchmark results — measured 2026-05-15:**
+
+| Metric | 1 GB VRAM (GTT spill) | 4 GB VRAM (100% GPU) | Delta |
+|--------|----------------------|----------------------|-------|
+| Generate rate — short prompt | ~25.5 tok/s | **27.7 tok/s** | +2.2 (+9%) |
+| Generate rate — long prompt (~700 tok) | ~24.2 tok/s | **27.5 tok/s** | +3.3 (+14%) |
+| Prompt ingestion (warm KV cache) | n/a | **~2200 tok/s** | — |
+| `ollama ps` PROCESSOR | partial GPU+GTT | **100% GPU** | ✓ |
+| Model in memory | ~4 GB GTT | **4.8 GB on-chip** | — |
+
+Verify current VRAM allocation:
+```bash
+cat /sys/class/drm/card*/device/mem_info_vram_total | awk '{printf "%.0f MB\n", $1/1024/1024}'
+```
+
+### Full performance progression
+
+| Stage | Config | Tokens/s |
+|-------|--------|----------|
+| 1 — CPU-only | `CPUQuota=400%` | ~1.1 tok/s |
+| 1 — CPU-only | `CPUQuota=600%` | ~10.3 tok/s |
+| 2 — GPU via Vulkan, 1 GB VRAM | `CPUQuota=600%` + `OLLAMA_VULKAN=1` | ~18.0 tok/s |
+| 3 — Extended context (same hardware) | + `qwen3.5-ids:2b` (32768 ctx) | ~25.5 tok/s |
+| **4 — 4 GB BIOS VRAM (current)** | + UMA Frame Buffer 4 GB | **~27.7 tok/s** |
 
 ---
 
